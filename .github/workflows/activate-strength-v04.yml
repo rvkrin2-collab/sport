@@ -1,0 +1,57 @@
+name: activate-strength-v04
+
+on:
+  push:
+    paths:
+      - '.github/workflows/activate-strength-v04.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  activate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Wire adaptive strength coach into current entrypoint
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          p = Path('backend/main.py')
+          text = p.read_text(encoding='utf-8')
+          imp = 'from backend.strength_api import router as strength_router\n'
+          if imp not in text:
+              needle = 'from pydantic import BaseModel, Field\n'
+              text = text.replace(needle, needle + imp, 1)
+          include = 'app.include_router(strength_router)\n'
+          if include not in text:
+              marker = 'app = FastAPI(title="Sport Dashboard", version="0.3.0")\n'
+              text = text.replace(marker, marker + include, 1)
+          p.write_text(text, encoding='utf-8')
+
+          js = Path('app.js')
+          js_text = js.read_text(encoding='utf-8')
+          ext = Path('strength-ui.js').read_text(encoding='utf-8')
+          if '// v0.4 adaptive strength coach UI.' not in js_text:
+              js.write_text(js_text + '\n\n' + ext + '\n', encoding='utf-8')
+
+          css = Path('styles.css')
+          css_text = css.read_text(encoding='utf-8')
+          ext_css = Path('strength-ui.css').read_text(encoding='utf-8')
+          if '.strength-coach{' not in css_text:
+              css.write_text(css_text + '\n\n' + ext_css + '\n', encoding='utf-8')
+          PY
+      - name: Commit activation
+        run: |
+          git config user.name "sport-bot"
+          git config user.email "sport-bot@users.noreply.github.com"
+          git add backend/main.py app.js styles.css
+          if git diff --cached --quiet; then
+            echo "Already activated"
+          else
+            git commit -m "Activate adaptive strength coach v0.4"
+            git push origin main
+          fi
