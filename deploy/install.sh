@@ -8,7 +8,6 @@ PORT="8911"
 cd "$APP_DIR"
 
 # Ubuntu/Debian may ship Python without ensurepip/venv support.
-# Detect the exact interpreter version and install the matching package.
 PY_MM="$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')"
 if ! python3 -c 'import ensurepip, venv' >/dev/null 2>&1; then
   echo "Installing Python venv support for Python $PY_MM..."
@@ -18,7 +17,6 @@ if ! python3 -c 'import ensurepip, venv' >/dev/null 2>&1; then
   fi
 fi
 
-# Remove a half-created environment left by a failed previous run.
 if [ -d "$VENV" ] && [ ! -x "$VENV/bin/python" ]; then
   rm -rf "$VENV"
 fi
@@ -71,9 +69,35 @@ Persistent=true
 WantedBy=timers.target
 EOF
 
+cat >/etc/systemd/system/sport-tredict-sync.service <<EOF
+[Unit]
+Description=Sync Sport dashboard with Tredict
+After=sport.service network-online.target
+Requires=sport.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/curl -fsS -X POST http://127.0.0.1:$PORT/api/integrations/tredict/sync
+EOF
+
+cat >/etc/systemd/system/sport-tredict-sync.timer <<'EOF'
+[Unit]
+Description=Sync Tredict data hourly
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=1h
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+EOF
+
 systemctl daemon-reload
 systemctl enable --now sport.service
 systemctl enable --now sport-update.timer
+systemctl enable --now sport-tredict-sync.timer
+systemctl restart sport.service
 
 # Replace only the /sport mapping. Existing /, /chinese and /portfolio stay untouched.
 tailscale serve --https=443 --set-path=/sport off >/dev/null 2>&1 || true
@@ -93,4 +117,4 @@ for i in {1..20}; do
   fi
 done
 
-echo "Sport v0.2 is running: https://finsync-01.tail481831.ts.net/sport/"
+echo "Sport v0.3 is running: https://finsync-01.tail481831.ts.net/sport/"
