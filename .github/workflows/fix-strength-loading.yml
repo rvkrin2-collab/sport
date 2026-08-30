@@ -1,0 +1,54 @@
+name: fix-strength-loading
+
+on:
+  push:
+    paths:
+      - '.github/workflows/fix-strength-loading.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Make strength plan loading independent of initial API race
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          p = Path('app.js')
+          text = p.read_text(encoding='utf-8')
+          text = text.replace(
+              "  async function loadStrengthPlan(){\n    if(typeof apiOnline==='undefined' || !apiOnline) return;\n    injectStrengthCoach();",
+              "  async function loadStrengthPlan(){\n    if(typeof api!=='function') return;\n    injectStrengthCoach();\n    const t=document.querySelector('#strengthPlanTitle');\n    if(t && t.textContent==='Загружаю план…') t.textContent='Загружаю план…';"
+          )
+          old = "  let tries=0;\n  const wait=setInterval(()=>{\n    tries++;\n    if(typeof apiOnline!=='undefined' && apiOnline){clearInterval(wait);loadStrengthPlan();}\n    if(tries>20) clearInterval(wait);\n  },500);"
+          new = "  // Load immediately; retry a few times because backend may be restarting after deploy.\n  let tries=0;\n  const loadWithRetry=async()=>{\n    tries++;\n    await loadStrengthPlan();\n    if(tries<6 && document.querySelector('#strengthPlanTitle')?.textContent==='Не удалось загрузить силовой план')\n      setTimeout(loadWithRetry,1500);\n  };\n  setTimeout(loadWithRetry,250);"
+          if old in text:
+              text = text.replace(old, new, 1)
+          else:
+              raise SystemExit('strength retry block not found')
+          p.write_text(text, encoding='utf-8')
+
+          m = Path('backend/main.py')
+          mt = m.read_text(encoding='utf-8')
+          mt = mt.replace('version="0.3.0"', 'version="0.4.1"', 1)
+          mt = mt.replace('"version":"0.3.0"', '"version":"0.4.1"', 1)
+          m.write_text(mt, encoding='utf-8')
+          PY
+      - name: Validate and commit
+        run: |
+          python -m py_compile backend/main.py backend/strength_api.py backend/strength_plan.py
+          git config user.name "sport-bot"
+          git config user.email "sport-bot@users.noreply.github.com"
+          git add app.js backend/main.py
+          if git diff --cached --quiet; then
+            echo "Already fixed"
+          else
+            git commit -m "Fix strength plan loading race"
+            git push origin main
+          fi
