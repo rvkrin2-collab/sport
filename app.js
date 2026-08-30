@@ -3,10 +3,37 @@ const END = new Date('2026-11-22T23:59:59');
 const $ = s => document.querySelector(s);
 const $$ = s => [...document.querySelectorAll(s)];
 
-const store = {
+const local = {
   get(key, fallback){ try{return JSON.parse(localStorage.getItem(key)) ?? fallback}catch{return fallback}},
-  set(key, val){localStorage.setItem(key, JSON.stringify(val))}
+  set(key, val){ localStorage.setItem(key, JSON.stringify(val)); }
 };
+
+let state = {
+  week: local.get('week', {}),
+  strengthDone: local.get('strengthDone', []),
+  exerciseLog: local.get('exerciseLog', []),
+  metrics: local.get('metrics', []),
+  workouts: []
+};
+let apiOnline = false;
+
+function apiPath(path){ return `api/${path}`; }
+async function api(path, options={}){
+  const r = await fetch(apiPath(path), {
+    headers:{'Content-Type':'application/json', ...(options.headers||{})},
+    cache:'no-store',
+    ...options
+  });
+  if(!r.ok) throw new Error(`${r.status} ${r.statusText}`);
+  return r.json();
+}
+
+function persistLocal(){
+  local.set('week', state.week);
+  local.set('strengthDone', state.strengthDone);
+  local.set('exerciseLog', state.exerciseLog);
+  local.set('metrics', state.metrics);
+}
 
 function projectInfo(){
   const now = new Date();
@@ -21,6 +48,34 @@ function projectInfo(){
   $('#weekNumber').textContent = week;
 }
 
+function injectV02(){
+  const firstGrid = $('#dashboard .grid--3');
+  if(firstGrid && !$('#readinessCard')){
+    const card = document.createElement('article');
+    card.id='readinessCard';
+    card.className='card readiness readiness--unknown';
+    card.innerHTML=`
+      <div class="readiness__top"><span class="eyebrow">Сегодня</span><span id="storageMode" class="storage-badge">локально</span></div>
+      <h2 id="readinessTitle">Проверяю восстановление…</h2>
+      <p id="readinessMessage" class="muted">Добавь сегодняшние показатели, чтобы система начала давать рекомендации.</p>
+      <div id="readinessReasons" class="reason-list"></div>`;
+    firstGrid.insertAdjacentElement('afterend', card);
+  }
+
+  const metricForm = $('.form-grid--metrics');
+  if(metricForm && !$('#metricPain')){
+    const pain = document.createElement('input');
+    pain.id='metricPain'; pain.type='number'; pain.min='0'; pain.max='10'; pain.step='1'; pain.placeholder='Боль, 0–10';
+    const save=$('#addMetric'); metricForm.insertBefore(pain, save);
+  }
+
+  const metricHeading = $('#metrics .card h2');
+  if(metricHeading && !$('#syncHint')){
+    const p=document.createElement('p'); p.id='syncHint'; p.className='sync-hint'; p.textContent='После запуска v0.2 данные синхронизируются через сервер и будут одинаковыми на телефоне и компьютере.';
+    metricHeading.insertAdjacentElement('afterend',p);
+  }
+}
+
 $$('.tab').forEach(btn=>btn.addEventListener('click',()=>{
   $$('.tab').forEach(x=>x.classList.remove('is-active'));
   $$('.panel').forEach(x=>x.classList.remove('is-active'));
@@ -29,13 +84,13 @@ $$('.tab').forEach(btn=>btn.addEventListener('click',()=>{
 }));
 
 function renderWeek(){
-  const data = store.get('week', {});
+  const data = state.week || {};
   $$('[data-week]').forEach(ch=>{
     ch.checked = !!data[ch.dataset.week];
-    ch.onchange = ()=>{
+    ch.onchange = async ()=>{
       data[ch.dataset.week] = ch.checked;
-      store.set('week', data);
-      renderWeek();
+      state.week=data; persistLocal(); renderWeek();
+      if(apiOnline){ try{ await api('week',{method:'POST',body:JSON.stringify({data})}); }catch(e){ console.warn(e); } }
     };
   });
   let score = 0;
@@ -44,20 +99,27 @@ function renderWeek(){
   $('#weekScore').textContent = score;
   $('#weekVerdict').textContent = score>=8?'Отличная неделя':score>=6?'Нормальная неделя':score>0?'В процессе':'Начинаем';
 }
-$('#resetWeek').onclick=()=>{store.set('week',{});renderWeek()};
+$('#resetWeek').onclick=async()=>{
+  state.week={}; persistLocal(); renderWeek();
+  if(apiOnline){ try{await api('week',{method:'POST',body:JSON.stringify({data:{}})});}catch(e){console.warn(e)} }
+};
 
 function renderStrength(){
-  const done = store.get('strengthDone', []);
+  const done = state.strengthDone || [];
   const grid = $('#strengthGrid'); grid.innerHTML='';
   for(let i=1;i<=24;i++){
     const b=document.createElement('button');
     b.className='level '+(done.includes(i)?'is-done':'');
     b.textContent=i;
     b.title=done.includes(i)?'Отметить как невыполненную':'Отметить выполненной';
-    b.onclick=()=>{
-      let arr=store.get('strengthDone',[]);
+    b.onclick=async()=>{
+      let arr=state.strengthDone || [];
       arr=arr.includes(i)?arr.filter(x=>x!==i):[...arr,i].sort((a,b)=>a-b);
-      store.set('strengthDone',arr); renderStrength();
+      state.strengthDone=arr; persistLocal(); renderStrength();
+      if(apiOnline){
+        try{ await api('strength/toggle',{method:'POST',body:JSON.stringify({number:i})}); }
+        catch(e){ console.warn(e); }
+      }
     };
     grid.appendChild(b);
   }
@@ -68,52 +130,61 @@ function renderStrength(){
 }
 
 function renderExercises(){
-  const log=store.get('exerciseLog',[]);
+  const log=state.exerciseLog || [];
   const box=$('#exerciseLog'); box.innerHTML='';
-  log.slice().reverse().forEach((x)=>{
+  log.slice().reverse().forEach(x=>{
     const d=document.createElement('div'); d.className='log-item';
-    d.innerHTML=`<div><strong>${escapeHtml(x.name)}</strong><br><small>${escapeHtml(x.date)}</small></div><div>${escapeHtml(x.result)}</div>`;
+    d.innerHTML=`<div><strong>${escapeHtml(x.name)}</strong><br><small>${escapeHtml(prettyDate(x.date))}</small></div><div>${escapeHtml(x.result)}</div>`;
     box.appendChild(d);
   });
 }
-$('#addExercise').onclick=()=>{
+$('#addExercise').onclick=async()=>{
   const name=$('#exerciseName').value.trim(), result=$('#exerciseResult').value.trim();
   if(!name||!result)return;
-  const log=store.get('exerciseLog',[]);
-  log.push({name,result,date:new Date().toLocaleDateString('ru-RU')});
-  store.set('exerciseLog',log); $('#exerciseName').value=''; $('#exerciseResult').value=''; renderExercises();
+  const row={name,result,date:new Date().toISOString().slice(0,10)};
+  state.exerciseLog.push(row); persistLocal(); renderExercises();
+  $('#exerciseName').value=''; $('#exerciseResult').value='';
+  if(apiOnline){ try{await api('exercises',{method:'POST',body:JSON.stringify(row)});}catch(e){console.warn(e)} }
 };
 
-function escapeHtml(s){return s.replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[m]))}
+function escapeHtml(s){return String(s??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[m]))}
+function prettyDate(s){
+  if(!s) return '';
+  if(/^\d{4}-\d{2}-\d{2}$/.test(s)) return new Date(`${s}T12:00:00`).toLocaleDateString('ru-RU');
+  return s;
+}
 
 function renderMetrics(){
-  const rows=store.get('metrics',[]).sort((a,b)=>a.date.localeCompare(b.date));
+  const rows=(state.metrics || []).slice().sort((a,b)=>a.date.localeCompare(b.date));
   const table=$('#metricTable');
-  table.innerHTML = rows.length ? '<div class="metric-row"><strong>Дата</strong><strong>Вес</strong><strong>Талия</strong><strong>Сон</strong><strong>Пульс</strong><strong>Энергия</strong></div>' : '<p class="muted">Пока нет замеров.</p>';
+  table.innerHTML = rows.length ? '<div class="metric-row metric-row--7"><strong>Дата</strong><strong>Вес</strong><strong>Талия</strong><strong>Сон</strong><strong>Пульс</strong><strong>Энергия</strong><strong>Боль</strong></div>' : '<p class="muted">Пока нет замеров.</p>';
   rows.slice().reverse().forEach(x=>{
-    const r=document.createElement('div'); r.className='metric-row';
-    r.innerHTML=`<span>${x.date}</span><span>${x.weight||'—'}</span><span>${x.waist||'—'}</span><span>${x.sleep||'—'}</span><span>${x.pulse||'—'}</span><span>${x.energy||'—'}</span>`;
+    const r=document.createElement('div'); r.className='metric-row metric-row--7';
+    r.innerHTML=`<span>${prettyDate(x.date)}</span><span>${x.weight||'—'}</span><span>${x.waist||'—'}</span><span>${x.sleep||'—'}</span><span>${x.pulse||'—'}</span><span>${x.energy||'—'}</span><span>${x.pain??'—'}</span>`;
     table.appendChild(r);
   });
   drawChart(rows);
 }
 $('#metricDate').value = new Date().toISOString().slice(0,10);
-$('#addMetric').onclick=()=>{
+$('#addMetric').onclick=async()=>{
+  const val=id=>$(id)?.value || '';
   const row={
-    date:$('#metricDate').value,
-    weight:$('#metricWeight').value,
-    waist:$('#metricWaist').value,
-    sleep:$('#metricSleep').value,
-    pulse:$('#metricPulse').value,
-    energy:$('#metricEnergy').value
+    date:val('#metricDate'), weight:numOrNull(val('#metricWeight')), waist:numOrNull(val('#metricWaist')),
+    sleep:numOrNull(val('#metricSleep')), pulse:intOrNull(val('#metricPulse')), energy:intOrNull(val('#metricEnergy')),
+    pain:intOrNull(val('#metricPain'))
   };
   if(!row.date)return;
-  const rows=store.get('metrics',[]);
+  const rows=state.metrics || [];
   const existing=rows.findIndex(x=>x.date===row.date);
   if(existing>=0) rows[existing]=row; else rows.push(row);
-  store.set('metrics',rows);
-  renderMetrics();
+  state.metrics=rows; persistLocal(); renderMetrics();
+  if(apiOnline){
+    try{ await api('metrics',{method:'POST',body:JSON.stringify(row)}); await loadReadiness(); }
+    catch(e){ console.warn(e); }
+  }
 };
+function numOrNull(v){return v===''?null:Number(v)}
+function intOrNull(v){return v===''?null:parseInt(v,10)}
 
 function drawChart(rows){
   const c=$('#metricChart'), dpr=window.devicePixelRatio||1;
@@ -140,19 +211,58 @@ function drawChart(rows){
   series.forEach((p,i)=>{ctx.fillText(p.val+' см',x(i)-16,y(p.val)-10)});
 }
 
+async function loadReadiness(){
+  const card=$('#readinessCard');
+  if(!card)return;
+  if(!apiOnline){
+    card.className='card readiness readiness--unknown';
+    $('#readinessTitle').textContent='Локальный режим';
+    $('#readinessMessage').textContent='После запуска серверной версии появятся синхронизация и рекомендации по восстановлению.';
+    $('#readinessReasons').innerHTML='';
+    return;
+  }
+  try{
+    const data=await api('today'); const r=data.readiness;
+    card.className=`card readiness readiness--${r.level}`;
+    $('#readinessTitle').textContent=r.title;
+    $('#readinessMessage').textContent=r.message;
+    $('#readinessReasons').innerHTML=(r.reasons||[]).map(x=>`<span>${escapeHtml(x)}</span>`).join('');
+  }catch(e){console.warn(e)}
+}
+
+async function connectBackend(){
+  try{
+    await api('health'); apiOnline=true;
+    $('#storageMode').textContent='сервер'; $('#storageMode').classList.add('storage-badge--online');
+
+    const serverState=await api('state');
+    const serverEmpty=(serverState.metrics||[]).length===0 && (serverState.exerciseLog||[]).length===0 && (serverState.strengthDone||[]).length===0;
+    const localHasData=(state.metrics||[]).length || (state.exerciseLog||[]).length || (state.strengthDone||[]).length || Object.keys(state.week||{}).length;
+    if(serverEmpty && localHasData){
+      try{
+        await api('migrate',{method:'POST',body:JSON.stringify({
+          week:state.week,strengthDone:state.strengthDone,exerciseLog:state.exerciseLog,metrics:state.metrics
+        })});
+      }catch(e){console.warn('migration',e)}
+    }
+    state=await api('state'); persistLocal(); renderAll();
+  }catch(e){
+    apiOnline=false;
+    if($('#storageMode')) $('#storageMode').textContent='локально';
+    loadReadiness();
+  }
+}
+
 $('#exportData').onclick=()=>{
-  const data={
-    week:store.get('week',{}),
-    strengthDone:store.get('strengthDone',[]),
-    exerciseLog:store.get('exerciseLog',[]),
-    metrics:store.get('metrics',[])
-  };
-  const blob=new Blob([JSON.stringify(data,null,2)],{type:'application/json'});
+  if(apiOnline){ window.open(apiPath('export'),'_blank'); return; }
+  const blob=new Blob([JSON.stringify(state,null,2)],{type:'application/json'});
   const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='stronger-drier-data.json';a.click();URL.revokeObjectURL(a.href);
 };
 $('#clearAll').onclick=()=>{
+  if(apiOnline){ alert('Серверные данные не удаляются одной кнопкой — это защита от случайного удаления.'); return; }
   if(confirm('Удалить все локальные данные проекта?')){localStorage.clear();location.reload()}
 };
 
+function renderAll(){ projectInfo(); renderWeek(); renderStrength(); renderExercises(); renderMetrics(); loadReadiness(); }
 window.addEventListener('resize',()=>renderMetrics());
-projectInfo(); renderWeek(); renderStrength(); renderExercises(); renderMetrics();
+injectV02(); renderAll(); connectBackend();
