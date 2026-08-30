@@ -18,10 +18,12 @@
 
 ```bash
 cd /opt/apps/sport
+git restore deploy/install.sh
 git pull --ff-only origin main
-chmod +x deploy/install.sh
-./deploy/install.sh
+bash deploy/install.sh
 ```
+
+Важно: не нужно делать `chmod +x deploy/install.sh` перед `git pull`. На некоторых серверах изменение executable-bit считается локальным изменением Git и блокирует последующее обновление.
 
 После установки сервис слушает `127.0.0.1:8911`, а Tailscale Serve публикует его внутри tailnet по `/sport/`.
 
