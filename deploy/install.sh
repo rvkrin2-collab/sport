@@ -7,9 +7,20 @@ PORT="8911"
 
 cd "$APP_DIR"
 
-if ! python3 -m venv --help >/dev/null 2>&1; then
+# Ubuntu/Debian may ship Python without ensurepip/venv support.
+# Detect the exact interpreter version and install the matching package.
+PY_MM="$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')"
+if ! python3 -c 'import ensurepip, venv' >/dev/null 2>&1; then
+  echo "Installing Python venv support for Python $PY_MM..."
   apt-get update
-  apt-get install -y python3-venv
+  if ! apt-get install -y "python${PY_MM}-venv"; then
+    apt-get install -y python3-venv
+  fi
+fi
+
+# Remove a half-created environment left by a failed previous run.
+if [ -d "$VENV" ] && [ ! -x "$VENV/bin/python" ]; then
+  rm -rf "$VENV"
 fi
 
 python3 -m venv "$VENV"
