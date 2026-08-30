@@ -6,10 +6,17 @@ VENV="$APP_DIR/.venv"
 PORT="8911"
 
 cd "$APP_DIR"
+
+if ! python3 -m venv --help >/dev/null 2>&1; then
+  apt-get update
+  apt-get install -y python3-venv
+fi
+
 python3 -m venv "$VENV"
 "$VENV/bin/pip" install --upgrade pip
 "$VENV/bin/pip" install -r requirements.txt
 mkdir -p "$APP_DIR/data"
+chmod 700 "$APP_DIR/data"
 
 cat >/etc/systemd/system/sport.service <<EOF
 [Unit]
@@ -57,11 +64,22 @@ systemctl daemon-reload
 systemctl enable --now sport.service
 systemctl enable --now sport-update.timer
 
-# Replace the old static /sport mapping with the application proxy.
+# Replace only the /sport mapping. Existing /, /chinese and /portfolio stay untouched.
 tailscale serve --https=443 --set-path=/sport off >/dev/null 2>&1 || true
 tailscale serve --bg --https=443 --set-path=/sport "http://127.0.0.1:$PORT"
 
-sleep 1
-curl -fsS "http://127.0.0.1:$PORT/api/health"
-echo
+for i in {1..20}; do
+  if curl -fsS "http://127.0.0.1:$PORT/api/health"; then
+    echo
+    break
+  fi
+  sleep 1
+  if [ "$i" -eq 20 ]; then
+    echo "sport.service did not become healthy" >&2
+    systemctl status sport.service --no-pager || true
+    journalctl -u sport.service -n 80 --no-pager || true
+    exit 1
+  fi
+done
+
 echo "Sport v0.2 is running: https://finsync-01.tail481831.ts.net/sport/"
