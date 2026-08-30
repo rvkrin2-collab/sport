@@ -1,0 +1,53 @@
+name: fix-body-ui-route
+
+on:
+  push:
+    paths:
+      - '.github/workflows/fix-body-ui-route.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Expose Body UI and align version
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          main = Path('backend/main.py')
+          text = main.read_text(encoding='utf-8')
+          text = text.replace('app = FastAPI(title="Sport Dashboard", version="0.4.1")', 'app = FastAPI(title="Sport Dashboard", version="0.5.1")')
+          text = text.replace('return {"ok":True,"version":"0.4.1","db":str(DB_PATH)}', 'return {"ok":True,"version":"0.5.1","db":str(DB_PATH)}')
+          route = '''\n\n@app.get("/body-ui.js")\ndef body_ui_js() -> FileResponse:\n    return FileResponse(ROOT/"body-ui.js", media_type="application/javascript", headers={"Cache-Control": "no-store"})\n'''
+          if '@app.get("/body-ui.js")' not in text:
+              marker = '''@app.get("/app.js")\ndef js() -> FileResponse:\n    return FileResponse(ROOT/"app.js",media_type="application/javascript")'''
+              text = text.replace(marker, marker + route)
+          main.write_text(text, encoding='utf-8')
+
+          index = Path('index.html')
+          html = index.read_text(encoding='utf-8')
+          html = html.replace('body-ui.js?v=0.5.0', 'body-ui.js?v=0.5.1')
+          index.write_text(html, encoding='utf-8')
+
+          test = Path('.github/workflows/test.yml')
+          t = test.read_text(encoding='utf-8')
+          t = t.replace("assert h.json()['version'] == '0.5.0', h.text", "assert h.json()['version'] == '0.5.1', h.text")
+          if "client.get('/body-ui.js')" not in t:
+              t = t.replace("assert h.json()['version'] == '0.5.1', h.text", "assert h.json()['version'] == '0.5.1', h.text\n              assert client.get('/body-ui.js').status_code == 200")
+          test.write_text(t, encoding='utf-8')
+          PY
+          git config user.name "sport-bot"
+          git config user.email "sport-bot@users.noreply.github.com"
+          git add backend/main.py index.html .github/workflows/test.yml
+          if git diff --cached --quiet; then
+            echo "Already fixed"
+          else
+            git commit -m "Serve Body photo UI correctly"
+            git push origin main
+          fi
