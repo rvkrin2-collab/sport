@@ -15,6 +15,7 @@ jobs:
           python-version: '3.12'
       - run: pip install -r requirements.txt
       - run: python -m py_compile backend/main.py backend/strength_api.py backend/strength_plan.py
+      - run: node --check app.js
       - name: API smoke test
         run: |
           python - <<'PY'
@@ -22,7 +23,8 @@ jobs:
           from backend.main import app
 
           with TestClient(app) as client:
-              assert client.get('/api/health').status_code == 200
+              h = client.get('/api/health')
+              assert h.status_code == 200, h.text
               r = client.get('/api/strength/current')
               assert r.status_code == 200, r.text
               data = r.json()
