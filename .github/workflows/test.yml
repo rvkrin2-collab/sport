@@ -14,21 +14,38 @@ jobs:
         with:
           python-version: '3.12'
       - run: pip install -r requirements.txt
-      - run: python -m py_compile backend/main.py backend/strength_api.py backend/strength_plan.py
+      - run: python -m py_compile backend/main.py backend/strength_api.py backend/strength_plan.py backend/body_api.py
       - run: node --check app.js
+      - run: node --check body-ui.js
       - name: API smoke test
         run: |
           python - <<'PY'
+          import io
+          from PIL import Image
           from fastapi.testclient import TestClient
           from backend.main import app
 
           with TestClient(app) as client:
               h = client.get('/api/health')
               assert h.status_code == 200, h.text
+              assert h.json()['version'] == '0.5.0', h.text
+
               r = client.get('/api/strength/current')
               assert r.status_code == 200, r.text
               data = r.json()
               assert data['next']['number'] == 1
               assert len(data['next']['exercises']) == 6
-              print(app.title, app.version, data['next']['type'])
+
+              image = Image.new('RGB', (120, 160), 'white')
+              buf = io.BytesIO()
+              image.save(buf, format='JPEG')
+              up = client.post('/api/body/photos', data={'photo_date':'2026-08-30','view':'front','note':'test'}, files={'photo':('test.jpg',buf.getvalue(),'image/jpeg')})
+              assert up.status_code == 200, up.text
+              photo = up.json()
+              assert photo['view'] == 'front'
+              assert client.get('/api/body/photos').status_code == 200
+              assert client.get('/api/body/summary').status_code == 200
+              assert client.get('/api/body/photos/'+photo['id']+'/file').status_code == 200
+              assert client.delete('/api/body/photos/'+photo['id']).status_code == 200
+              print(app.title, app.version, data['next']['type'], 'body-ok')
           PY
