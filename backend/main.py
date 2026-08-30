@@ -13,6 +13,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from pydantic import BaseModel, Field
 from backend.strength_api import router as strength_router
+from backend.body_api import router as body_router
 
 ROOT = Path(__file__).resolve().parent.parent
 DATA_DIR = ROOT / "data"
@@ -24,6 +25,7 @@ END_DATE = date(2026, 11, 22)
 
 app = FastAPI(title="Sport Dashboard", version="0.4.1")
 app.include_router(strength_router)
+app.include_router(body_router)
 
 
 @app.middleware("http")
