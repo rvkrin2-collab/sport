@@ -28,7 +28,7 @@ jobs:
           with TestClient(app) as client:
               h = client.get('/api/health')
               assert h.status_code == 200, h.text
-              assert h.json()['version'] == '0.5.0', h.text
+              assert h.json()['ok'] is True, h.text
 
               r = client.get('/api/strength/current')
               assert r.status_code == 200, r.text
