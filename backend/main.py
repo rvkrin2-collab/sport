@@ -22,7 +22,7 @@ TREDICT_BASE = "https://www.tredict.com/api/oauth/v2"
 START_DATE = date(2026, 8, 30)
 END_DATE = date(2026, 11, 22)
 
-app = FastAPI(title="Sport Dashboard", version="0.3.0")
+app = FastAPI(title="Sport Dashboard", version="0.4.1")
 app.include_router(strength_router)
 
 
@@ -546,7 +546,7 @@ async def sync_tredict_data() -> dict[str, Any]:
 
 @app.get("/api/health")
 def health() -> dict[str, Any]:
-    return {"ok":True,"version":"0.3.0","db":str(DB_PATH)}
+    return {"ok":True,"version":"0.4.1","db":str(DB_PATH)}
 
 
 @app.get("/api/state")

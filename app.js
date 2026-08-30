@@ -411,8 +411,10 @@ injectV03(); renderAll(); connectBackend();
   }
 
   async function loadStrengthPlan(){
-    if(typeof apiOnline==='undefined' || !apiOnline) return;
+    if(typeof api!=='function') return;
     injectStrengthCoach();
+    const t=document.querySelector('#strengthPlanTitle');
+    if(t && t.textContent==='Загружаю план…') t.textContent='Загружаю план…';
     try{
       const data=await api('strength/current');
       renderStrengthPlan(data);
@@ -467,11 +469,14 @@ injectV03(); renderAll(); connectBackend();
   injectStrengthCoach();
   document.querySelector('#saveStrengthSession')?.addEventListener('click',saveStrength);
   document.querySelector('.tab[data-tab="strength"]')?.addEventListener('click',()=>setTimeout(loadStrengthPlan,80));
+  // Load immediately; retry a few times because backend may be restarting after deploy.
   let tries=0;
-  const wait=setInterval(()=>{
+  const loadWithRetry=async()=>{
     tries++;
-    if(typeof apiOnline!=='undefined' && apiOnline){clearInterval(wait);loadStrengthPlan();}
-    if(tries>20) clearInterval(wait);
-  },500);
+    await loadStrengthPlan();
+    if(tries<6 && document.querySelector('#strengthPlanTitle')?.textContent==='Не удалось загрузить силовой план')
+      setTimeout(loadWithRetry,1500);
+  };
+  setTimeout(loadWithRetry,250);
 })();
 
