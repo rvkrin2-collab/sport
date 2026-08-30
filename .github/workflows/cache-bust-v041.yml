@@ -1,0 +1,36 @@
+name: cache-bust-v041
+
+on:
+  push:
+    paths:
+      - '.github/workflows/cache-bust-v041.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Bust browser cache for v0.4.1
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p=Path('index.html')
+          text=p.read_text(encoding='utf-8')
+          text=text.replace('<script src="app.js"></script>','<script src="app.js?v=0.4.1"></script>')
+          text=text.replace('<link rel="stylesheet" href="styles.css">','<link rel="stylesheet" href="styles.css?v=0.4.1">')
+          p.write_text(text,encoding='utf-8')
+          PY
+          git config user.name "sport-bot"
+          git config user.email "sport-bot@users.noreply.github.com"
+          git add index.html
+          if git diff --cached --quiet; then
+            echo "Already patched"
+          else
+            git commit -m "Bust mobile cache for strength v0.4.1"
+            git push origin main
+          fi
