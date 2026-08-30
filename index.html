@@ -1,0 +1,244 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Сильнее и суше — 12 недель</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="hero">
+    <div class="hero__inner">
+      <div>
+        <div class="eyebrow">Личный проект · 30 августа — 22 ноября 2026</div>
+        <h1>Сильнее и суше</h1>
+        <p class="hero__lead">Не «идеальная жизнь», а 12 недель с понятным финишем: 4 бега по плану, 2 короткие силовые, питание без фанатизма и измеримый прогресс.</p>
+      </div>
+      <div class="hero__meter">
+        <div class="meter-label"><span>Прогресс проекта</span><strong id="projectPct">0%</strong></div>
+        <div class="meter"><div id="projectBar" class="meter__fill"></div></div>
+        <div class="hero__meta">
+          <span id="daysLeft">—</span>
+          <span id="strengthDone">0/24 силовых</span>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <nav class="tabs" aria-label="Разделы">
+    <button class="tab is-active" data-tab="dashboard">Сегодня</button>
+    <button class="tab" data-tab="week">Неделя</button>
+    <button class="tab" data-tab="strength">24 силовых</button>
+    <button class="tab" data-tab="metrics">Показатели</button>
+    <button class="tab" data-tab="modes">Поездки</button>
+  </nav>
+
+  <main>
+    <section id="dashboard" class="panel is-active">
+      <div class="grid grid--3">
+        <article class="card stat">
+          <div class="stat__label">Текущая неделя</div>
+          <div class="stat__value" id="weekNumber">1</div>
+          <div class="stat__sub">из 12</div>
+        </article>
+        <article class="card stat">
+          <div class="stat__label">Очки недели</div>
+          <div class="stat__value"><span id="weekScore">0</span><small>/10</small></div>
+          <div class="stat__sub" id="weekVerdict">Начинаем</div>
+        </article>
+        <article class="card stat">
+          <div class="stat__label">Следующая силовая</div>
+          <div class="stat__value" id="nextStrength">№1</div>
+          <div class="stat__sub">30–40 минут</div>
+        </article>
+      </div>
+
+      <div class="grid grid--2">
+        <article class="card">
+          <h2>Главная цель</h2>
+          <p class="big-copy">К 22 ноября: талия −4…6 см, вес ориентировочно −2…4 кг, сила выше, беговая форма не хуже.</p>
+          <div class="rule"></div>
+          <p class="muted">Вес — вторичен. Внешний вид оцениваем по талии, фото и силовым показателям.</p>
+        </article>
+
+        <article class="card">
+          <h2>Правило проекта</h2>
+          <p class="big-copy">Не надо быть идеальным. Нужно накопить 24 силовые тренировки и не сломать бег.</p>
+          <div class="rule"></div>
+          <p class="muted">Командировка, дайвинг или отпуск не обнуляют программу — включается другой режим.</p>
+        </article>
+      </div>
+
+      <article class="card today-card">
+        <div class="today-card__head">
+          <div>
+            <div class="eyebrow">Минимум на эту неделю</div>
+            <h2>4 бега + 2 короткие силовые</h2>
+          </div>
+          <button class="ghost" id="resetWeek">Сбросить неделю</button>
+        </div>
+
+        <div class="check-grid">
+          <label class="check"><input type="checkbox" data-week="run1"><span>Бег 1</span></label>
+          <label class="check"><input type="checkbox" data-week="run2"><span>Бег 2</span></label>
+          <label class="check"><input type="checkbox" data-week="run3"><span>Бег 3</span></label>
+          <label class="check"><input type="checkbox" data-week="run4"><span>Бег 4</span></label>
+          <label class="check check--double"><input type="checkbox" data-week="strength1"><span>Силовая 1 <b>+2</b></span></label>
+          <label class="check check--double"><input type="checkbox" data-week="strength2"><span>Силовая 2 <b>+2</b></span></label>
+          <label class="check"><input type="checkbox" data-week="food"><span>Питание</span></label>
+          <label class="check"><input type="checkbox" data-week="measure"><span>Замеры</span></label>
+        </div>
+      </article>
+    </section>
+
+    <section id="week" class="panel">
+      <article class="card">
+        <h2>Логика недели</h2>
+        <p class="muted">Дни можно переставлять под беговой план тренера. Важна логика: силовые ставим рядом со спокойными пробежками, а не перед интервалами и длительной.</p>
+        <div class="schedule">
+          <div class="schedule__row"><strong>Интервальная 1</strong><span>Ключевой бег. Без силовой на ноги.</span></div>
+          <div class="schedule__row"><strong>Спокойный бег + силовая А</strong><span>Лучший день для совмещения.</span></div>
+          <div class="schedule__row"><strong>Интервальная 2 / спокойный</strong><span>По плану тренера.</span></div>
+          <div class="schedule__row"><strong>Спокойный бег + силовая Б</strong><span>Вторая силовая недели.</span></div>
+          <div class="schedule__row"><strong>Длительный</strong><span>Без тяжёлых ног накануне.</span></div>
+        </div>
+      </article>
+
+      <div class="grid grid--2">
+        <article class="card">
+          <h2>Силовая А</h2>
+          <ol class="exercise-list">
+            <li><span>Жим ногами</span><b>3×8–12</b></li>
+            <li><span>Отжимания с усложнением</span><b>3×10–15</b></li>
+            <li><span>Тяга блока к груди</span><b>3×8–12</b></li>
+            <li><span>Горизонтальная тяга</span><b>3×8–12</b></li>
+            <li><span>Разведения на плечи</span><b>2×15–20</b></li>
+            <li><span>Планка / корпус</span><b>2 подхода</b></li>
+          </ol>
+        </article>
+
+        <article class="card">
+          <h2>Силовая Б</h2>
+          <ol class="exercise-list">
+            <li><span>Ягодичный мост</span><b>3×10–12</b></li>
+            <li><span>Выпады назад</span><b>2×8/нога</b></li>
+            <li><span>Наклонный жим гантелей</span><b>3×8–12</b></li>
+            <li><span>Тяга блока / гантели</span><b>3×8–12</b></li>
+            <li><span>Задняя дельта</span><b>2×15–20</b></li>
+            <li><span>Боковая планка</span><b>2 подхода</b></li>
+          </ol>
+        </article>
+      </div>
+
+      <article class="card note">
+        <strong>Отжимания:</strong> ежедневные 35 повторов больше не являются обязательством. Они становятся частью силовой прогрессии. В остальные дни — только по желанию и без отказа.
+      </article>
+    </section>
+
+    <section id="strength" class="panel">
+      <article class="card">
+        <div class="section-head">
+          <div>
+            <div class="eyebrow">Игровая механика</div>
+            <h2>24 тренировки = 24 уровня</h2>
+          </div>
+          <div class="badge" id="strengthBadge">0 / 24</div>
+        </div>
+        <p class="muted">После поездки не начинаем заново. Просто продолжаем со следующего номера.</p>
+        <div id="strengthGrid" class="levels"></div>
+      </article>
+
+      <article class="card">
+        <h2>Как фиксировать прогресс</h2>
+        <p class="muted">Пять основных упражнений. Записывай вес и повторы. Когда верх диапазона достигнут во всех подходах — повышай вес на минимальный шаг.</p>
+        <div class="form-grid">
+          <input id="exerciseName" placeholder="Упражнение, например наклонный жим">
+          <input id="exerciseResult" placeholder="Например 22 кг · 10/9/8">
+          <button id="addExercise" class="primary">Добавить результат</button>
+        </div>
+        <div id="exerciseLog" class="log"></div>
+      </article>
+    </section>
+
+    <section id="metrics" class="panel">
+      <div class="grid grid--2">
+        <article class="card">
+          <h2>Добавить замер</h2>
+          <div class="form-grid form-grid--metrics">
+            <input id="metricDate" type="date">
+            <input id="metricWeight" type="number" step="0.1" placeholder="Вес, кг">
+            <input id="metricWaist" type="number" step="0.1" placeholder="Талия, см">
+            <input id="metricSleep" type="number" step="0.1" placeholder="Сон, ч">
+            <input id="metricPulse" type="number" step="1" placeholder="Пульс покоя">
+            <select id="metricEnergy">
+              <option value="">Энергия 1–5</option>
+              <option>1</option><option>2</option><option>3</option><option>4</option><option>5</option>
+            </select>
+            <button id="addMetric" class="primary">Сохранить</button>
+          </div>
+        </article>
+
+        <article class="card baseline">
+          <div>
+            <div class="eyebrow">Точка старта</div>
+            <h2>Фото 30 августа</h2>
+            <p class="muted">Повтори фото 27 сентября, 25 октября и 22 ноября: то же освещение, расстояние и расслабленная поза.</p>
+          </div>
+          <img src="baseline.jpg" alt="Стартовое фото" onerror="this.style.display='none'">
+        </article>
+      </div>
+
+      <article class="card">
+        <div class="section-head">
+          <div>
+            <h2>Динамика</h2>
+            <p class="muted">Смотрим не на отдельный день, а на направление.</p>
+          </div>
+          <button id="exportData" class="ghost">Экспорт данных</button>
+        </div>
+        <canvas id="metricChart" height="280"></canvas>
+        <div id="metricTable" class="metric-table"></div>
+      </article>
+    </section>
+
+    <section id="modes" class="panel">
+      <div class="mode-grid">
+        <article class="card mode-card">
+          <div class="mode-card__tag">Обычная неделя</div>
+          <h2>Развитие</h2>
+          <p>4 бега по плану + 2 силовые по 30–40 минут.</p>
+          <ul><li>Питание в лёгком дефиците</li><li>160 г белка</li><li>1–2 дня без тяжёлой нагрузки</li></ul>
+        </article>
+
+        <article class="card mode-card">
+          <div class="mode-card__tag">Командировка</div>
+          <h2>Поддержание</h2>
+          <p>2 бега + 1–2 комплекса по 15–25 минут.</p>
+          <ul><li>Никакого «наверстывания»</li><li>Белок в каждом основном приёме пищи</li><li>Сон важнее дополнительной тренировки</li></ul>
+        </article>
+
+        <article class="card mode-card">
+          <div class="mode-card__tag">Дайвинг / сафари</div>
+          <h2>Восстановление</h2>
+          <p>Дайвинг становится основной физической нагрузкой.</p>
+          <ul><li>Без интервалов и тяжёлых ног</li><li>Вода + электролиты</li><li>После возвращения просто продолжаем цикл</li></ul>
+        </article>
+
+        <article class="card mode-card">
+          <div class="mode-card__tag">Отпуск</div>
+          <h2>Свобода</h2>
+          <p>Ходьба, плавание, походы и активные дни засчитываются как жизнь, а не «пропуск тренировок».</p>
+          <ul><li>1 короткая силовая — уже хорошо</li><li>Бег только если хочется</li><li>Не превращать отпуск в тренировочный сбор</li></ul>
+        </article>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <span>Сильнее и суше · данные хранятся только в браузере</span>
+    <button id="clearAll" class="link-button">Очистить всё</button>
+  </footer>
+
+  <script src="app.js"></script>
+</body>
+</html>
