@@ -1,0 +1,54 @@
+name: activate-body-v05
+
+on:
+  push:
+    paths:
+      - '.github/workflows/activate-body-v05.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  activate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Wire Body screen into app
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          p=Path('backend/main.py')
+          text=p.read_text(encoding='utf-8')
+          imp='from backend.body_api import router as body_router\n'
+          anchor='from backend.strength_api import router as strength_router\n'
+          if imp not in text:
+              text=text.replace(anchor, anchor+imp, 1)
+          if 'app.include_router(body_router)' not in text:
+              text=text.replace('app.include_router(strength_router)\n', 'app.include_router(strength_router)\napp.include_router(body_router)\n', 1)
+          text=text.replace('version="0.3.0"', 'version="0.5.0"')
+          text=text.replace('"version":"0.3.0"', '"version":"0.5.0"')
+          p.write_text(text, encoding='utf-8')
+
+          h=Path('index.html')
+          html=h.read_text(encoding='utf-8')
+          html=html.replace('data-tab="metrics">Показатели</button>', 'data-tab="metrics">Тело</button>')
+          if 'body-ui.css' not in html:
+              html=html.replace('</head>', '  <link rel="stylesheet" href="body-ui.css?v=0.5.0">\n</head>', 1)
+          if 'body-ui.js' not in html:
+              html=html.replace('</body>', '  <script src="body-ui.js?v=0.5.0"></script>\n</body>', 1)
+          h.write_text(html, encoding='utf-8')
+          PY
+      - name: Commit activation
+        run: |
+          git config user.name "sport-bot"
+          git config user.email "sport-bot@users.noreply.github.com"
+          git add backend/main.py index.html
+          if git diff --cached --quiet; then
+            echo "Already activated"
+          else
+            git commit -m "Activate private Body photos v0.5"
+            git push origin main
+          fi
