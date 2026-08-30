@@ -36,7 +36,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 WorkingDirectory=$APP_DIR
-ExecStart=$VENV/bin/uvicorn backend.main:app --host 127.0.0.1 --port $PORT
+ExecStart=$VENV/bin/uvicorn backend.app:app --host 127.0.0.1 --port $PORT
 Restart=always
 RestartSec=3
 Environment=PYTHONUNBUFFERED=1
@@ -117,4 +117,4 @@ for i in {1..20}; do
   fi
 done
 
-echo "Sport v0.3 is running: https://finsync-01.tail481831.ts.net/sport/"
+echo "Sport v0.4 is running: https://finsync-01.tail481831.ts.net/sport/"
