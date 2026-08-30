@@ -7,8 +7,8 @@ from pathlib import Path
 from statistics import mean
 from typing import Any
 
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from pydantic import BaseModel, Field
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -17,7 +17,22 @@ DB_PATH = DATA_DIR / "sport.db"
 START_DATE = date(2026, 8, 30)
 END_DATE = date(2026, 11, 22)
 
-app = FastAPI(title="Sport Dashboard", version="0.2.0")
+app = FastAPI(title="Sport Dashboard", version="0.2.1")
+
+
+@app.middleware("http")
+async def support_tailscale_path_prefix(request: Request, call_next):
+    """Work both when Tailscale preserves /sport and when it strips the mount path."""
+    path = request.scope.get("path", "")
+    if path == "/sport":
+        return RedirectResponse(url="/sport/", status_code=307)
+    if path.startswith("/sport/"):
+        request.scope["path"] = path[len("/sport"):]
+        request.scope["root_path"] = "/sport"
+    response = await call_next(request)
+    if request.scope["path"].startswith("/api/"):
+        response.headers["Cache-Control"] = "no-store"
+    return response
 
 
 class WeekPayload(BaseModel):
@@ -186,7 +201,6 @@ def readiness() -> dict[str, Any]:
     latest = rows[0]
     reasons: list[str] = []
     score = 0
-
     sleep = latest.get("sleep")
     energy = latest.get("energy")
     pain = latest.get("pain")
@@ -241,7 +255,7 @@ def readiness() -> dict[str, Any]:
 
 @app.get("/api/health")
 def health() -> dict[str, Any]:
-    return {"ok": True, "version": "0.2.0", "db": str(DB_PATH)}
+    return {"ok": True, "version": "0.2.1", "db": str(DB_PATH)}
 
 
 @app.get("/api/state")
