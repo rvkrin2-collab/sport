@@ -1,9 +1,14 @@
-// v0.4 adaptive strength coach UI. Appended to app.js by backend/app.py.
+// v0.5.1 adaptive strength coach UI: each working set has its own weight and reps.
 (function(){
-  function repsText(prev){
+  function setSummary(prev){
     if(!prev) return '';
-    const load=prev.load!==null&&prev.load!==undefined?`${prev.load} кг · `:'';
-    return `${load}${(prev.reps||[]).join('/')}${prev.rir!==null&&prev.rir!==undefined?` · RIR ${prev.rir}`:''}${prev.pain?` · боль ${prev.pain}/10`:''}`;
+    const reps=prev.reps||[];
+    const loads=(prev.loads&&prev.loads.length)?prev.loads:reps.map(()=>prev.load);
+    const sets=reps.map((rep,i)=>{
+      const load=loads[i];
+      return load!==null&&load!==undefined?`${load}×${rep}`:`${rep}`;
+    }).join(' · ');
+    return `${sets}${prev.rir!==null&&prev.rir!==undefined?` · RIR ${prev.rir}`:''}${prev.pain?` · боль ${prev.pain}/10`:''}`;
   }
 
   function strengthModeLabel(plan){
@@ -23,15 +28,24 @@
         <div><div class="eyebrow">Следующая тренировка</div><h2 id="strengthPlanTitle">Загружаю план…</h2></div>
         <span id="strengthMode" class="integration-status">—</span>
       </div>
-      <p id="strengthPhaseText" class="muted">План корректируется по твоим прошлым силовым и текущей беговой нагрузке.</p>
+      <p id="strengthPhaseText" class="muted">План корректируется по прошлым силовым и текущей беговой нагрузке.</p>
       <div id="strengthFatigue" class="strength-alert" style="display:none"></div>
       <div id="strengthPrescription" class="strength-prescription"></div>
       <div class="strength-coach__footer">
-        <div class="tiny">Заполняй фактический вес, повторы и запас повторов. Следующая тренировка пересчитается автоматически.</div>
+        <div class="tiny">Вводи вес и повторы отдельно для каждого рабочего подхода. Разминку сюда записывать не надо. RIR — запас повторов после последнего рабочего подхода.</div>
         <button id="saveStrengthSession" class="primary" style="display:none">Завершить тренировку</button>
       </div>
       <div id="strengthSaveMessage" class="tiny"></div>`;
     first.insertAdjacentElement('beforebegin',card);
+  }
+
+  function renderSetRows(ex,disabled){
+    const defaultLoad=ex.target_load!==null&&ex.target_load!==undefined?ex.target_load:'';
+    return Array.from({length:ex.sets},(_,i)=>`<div class="strength-set-row" data-set="${i}">
+      <div class="strength-set-label">Подход ${i+1}</div>
+      <label>Вес, кг<input class="s-load" type="number" step="0.5" min="0" value="${defaultLoad}" placeholder="—" ${disabled}></label>
+      <label>Повторы<input class="s-reps" type="number" step="1" min="1" max="100" placeholder="${ex.rep_min}–${ex.rep_max}" ${disabled}></label>
+    </div>`).join('');
   }
 
   function renderStrengthPlan(data){
@@ -55,14 +69,13 @@
       alert.className=`strength-alert strength-alert--${plan.fatigue_mode}`;
       alert.textContent=plan.fatigue_mode==='red'
         ? `Сегодня лучше перенести силовую${plan.fatigue_reason?`: ${plan.fatigue_reason}`:''}.`
-        : `План облегчен автоматически${plan.fatigue_reason?`: ${plan.fatigue_reason}`:''}.`;
+        : `План облегчён автоматически${plan.fatigue_reason?`: ${plan.fatigue_reason}`:''}.`;
     }else alert.style.display='none';
 
     const box=document.querySelector('#strengthPrescription');
     box.innerHTML=plan.exercises.map((ex,i)=>{
-      const prev=repsText(ex.previous);
+      const prev=setSummary(ex.previous);
       const disabled=ex.sets===0?'disabled':'';
-      const loadValue=ex.target_load!==null&&ex.target_load!==undefined?ex.target_load:(ex.previous?.load??'');
       return `<div class="strength-exercise ${ex.sets===0?'is-skipped':''}" data-exercise="${ex.key}">
         <div class="strength-exercise__number">${i+1}</div>
         <div class="strength-exercise__body">
@@ -70,11 +83,10 @@
           <div class="strength-target">${escapeHtml(ex.target_text)}</div>
           ${prev?`<div class="strength-previous">Прошлый раз: ${escapeHtml(prev)}</div>`:''}
           <div class="strength-note">${escapeHtml(ex.notes)}</div>
-          ${ex.sets?`<div class="strength-inputs">
-            <label>Вес<input class="s-load" type="number" step="0.5" min="0" value="${loadValue}" placeholder="кг" ${disabled}></label>
-            <label>Повторы<input class="s-reps" type="text" inputmode="numeric" placeholder="10/10/9" ${disabled}></label>
-            <label>RIR<input class="s-rir" type="number" step="0.5" min="0" max="5" placeholder="2" ${disabled}></label>
-            <label>Боль<input class="s-pain" type="number" step="1" min="0" max="10" value="0" ${disabled}></label>
+          ${ex.sets?`<div class="strength-set-list">${renderSetRows(ex,disabled)}</div>
+          <div class="strength-inputs strength-inputs--feedback">
+            <label>RIR после последнего подхода<input class="s-rir" type="number" step="0.5" min="0" max="5" placeholder="2" ${disabled}></label>
+            <label>Боль 0–10<input class="s-pain" type="number" step="1" min="0" max="10" value="0" ${disabled}></label>
           </div>`:''}
         </div>
       </div>`;
@@ -83,8 +95,8 @@
   }
 
   async function loadStrengthPlan(){
-    if(typeof apiOnline==='undefined' || !apiOnline) return;
     injectStrengthCoach();
+    if(typeof apiOnline==='undefined' || !apiOnline) return;
     try{
       const data=await api('strength/current');
       renderStrengthPlan(data);
@@ -92,10 +104,6 @@
       const t=document.querySelector('#strengthPlanTitle'); if(t)t.textContent='Не удалось загрузить силовой план';
       const m=document.querySelector('#strengthSaveMessage'); if(m){m.textContent=e.message;m.className='tiny error-text'}
     }
-  }
-
-  function parseReps(value){
-    return String(value||'').split(/[\/ ,;]+/).map(x=>parseInt(x,10)).filter(x=>Number.isFinite(x)&&x>0);
   }
 
   async function saveStrength(){
@@ -106,14 +114,25 @@
     document.querySelectorAll('#strengthPrescription .strength-exercise').forEach(row=>{
       const ex=plan.exercises.find(x=>x.key===row.dataset.exercise);
       if(!ex || ex.sets===0) return;
-      const reps=parseReps(row.querySelector('.s-reps')?.value);
+      const reps=[];
+      const loads=[];
+      row.querySelectorAll('.strength-set-row').forEach(setRow=>{
+        const repRaw=setRow.querySelector('.s-reps')?.value;
+        if(repRaw==='') return;
+        const rep=Number(repRaw);
+        if(!Number.isFinite(rep)||rep<=0) return;
+        const loadRaw=setRow.querySelector('.s-load')?.value;
+        reps.push(Math.round(rep));
+        loads.push(loadRaw===''?null:Number(loadRaw));
+      });
       if(!reps.length) return;
-      const rawLoad=row.querySelector('.s-load')?.value;
       const rawRir=row.querySelector('.s-rir')?.value;
       const rawPain=row.querySelector('.s-pain')?.value;
+      const lastLoad=[...loads].reverse().find(x=>x!==null&&Number.isFinite(x));
       exercises.push({
         exercise_key:ex.key,
-        load:rawLoad===''?null:Number(rawLoad),
+        load:lastLoad===undefined?null:lastLoad,
+        loads,
         reps,
         rir:rawRir===''?null:Number(rawRir),
         pain:rawPain===''?0:Number(rawPain),
@@ -121,7 +140,7 @@
       });
     });
     if(exercises.length<3){
-      const m=document.querySelector('#strengthSaveMessage');m.textContent='Заполни повторы хотя бы в трёх упражнениях.';m.className='tiny error-text';return;
+      const m=document.querySelector('#strengthSaveMessage');m.textContent='Заполни рабочие подходы хотя бы в трёх упражнениях.';m.className='tiny error-text';return;
     }
     btn.disabled=true;btn.textContent='Сохраняю…';
     try{
@@ -143,6 +162,6 @@
   const wait=setInterval(()=>{
     tries++;
     if(typeof apiOnline!=='undefined' && apiOnline){clearInterval(wait);loadStrengthPlan();}
-    if(tries>20) clearInterval(wait);
-  },500);
+    if(tries>30) clearInterval(wait);
+  },400);
 })();
