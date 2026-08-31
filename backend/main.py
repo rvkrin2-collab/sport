@@ -726,6 +726,16 @@ def css() -> FileResponse:
 def js() -> FileResponse:
     return FileResponse(ROOT/"app.js",media_type="application/javascript")
 
+@app.get("/strength-ui.js")
+def strength_ui_js() -> FileResponse:
+    return FileResponse(ROOT/"strength-ui.js", media_type="application/javascript", headers={"Cache-Control": "no-store"})
+
+
+@app.get("/strength-ui.css")
+def strength_ui_css() -> FileResponse:
+    return FileResponse(ROOT/"strength-ui.css", media_type="text/css", headers={"Cache-Control": "no-store"})
+
+
 @app.get("/body-ui.js")
 def body_ui_js() -> FileResponse:
     return FileResponse(ROOT/"body-ui.js", media_type="application/javascript", headers={"Cache-Control": "no-store"})
