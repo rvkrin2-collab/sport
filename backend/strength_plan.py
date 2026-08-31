@@ -107,6 +107,24 @@ def sets_for(ex: Exercise, phase: dict[str, Any], fatigue_mode: str) -> int:
     return sets
 
 
+def _load_profile(previous: dict[str, Any], rep_min: int) -> tuple[list[float | None], float | None, bool]:
+    reps = previous.get("reps") or []
+    loads = list(previous.get("loads") or [])
+    legacy = previous.get("load")
+    if not loads and reps:
+        loads = [legacy for _ in reps]
+    if len(loads) < len(reps):
+        loads.extend([legacy] * (len(reps) - len(loads)))
+    loads = loads[: len(reps)]
+
+    valid_pairs = [(float(load), int(rep)) for load, rep in zip(loads, reps) if load is not None]
+    sustainable = [load for load, rep in valid_pairs if rep >= rep_min]
+    anchor = max(sustainable) if sustainable else (float(legacy) if legacy is not None else None)
+    distinct = {round(load, 4) for load, _ in valid_pairs}
+    variable = len(distinct) > 1
+    return loads, anchor, variable
+
+
 def progression(previous: dict[str, Any] | None, ex: Exercise, target_sets: int, rep_min: int, rep_max: int,
                 allow_progression: bool) -> dict[str, Any]:
     if not previous:
@@ -117,51 +135,58 @@ def progression(previous: dict[str, Any] | None, ex: Exercise, target_sets: int,
             "decision": "baseline",
         }
 
-    load = previous.get("load")
     reps = previous.get("reps") or []
     rir = previous.get("rir")
     pain = previous.get("pain") or 0
+    loads, anchor_load, variable_loads = _load_profile(previous, rep_min)
     completed = len(reps) >= max(1, target_sets)
     at_top = completed and all(int(r) >= rep_max for r in reps[:target_sets])
-    below = reps and min(int(r) for r in reps) < rep_min
+    below = bool(reps) and min(int(r) for r in reps) < rep_min
 
     if pain >= 3:
         return {
             "previous": previous,
-            "target_load": load,
+            "target_load": anchor_load,
             "target_text": "Боль ≥3/10 в прошлый раз: не прогрессировать. Уменьши вес/амплитуду на 10–15% или замени упражнение.",
             "decision": "pain",
         }
     if not allow_progression:
         return {
             "previous": previous,
-            "target_load": load,
-            "target_text": f"Сегодня сохранить прошлый вес и работать с запасом: {target_sets}×{rep_min}–{rep_max}.",
+            "target_load": anchor_load,
+            "target_text": f"Сегодня сохранить рабочий вес и работать с запасом: {target_sets}×{rep_min}–{rep_max}.",
             "decision": "hold_fatigue",
         }
-    if load is None or ex.increment == 0:
+    if anchor_load is None or ex.increment == 0:
         if at_top:
             return {
                 "previous": previous,
-                "target_load": load,
+                "target_load": anchor_load,
                 "target_text": "Усложни вариант совсем немного, но сохрани 1–2 повтора в запасе.",
                 "decision": "progress_variant",
             }
         return {
             "previous": previous,
-            "target_load": load,
+            "target_load": anchor_load,
             "target_text": f"Повтори вариант и добавь 1–2 суммарных повтора: цель {target_sets}×{rep_min}–{rep_max}.",
             "decision": "add_reps",
+        }
+    if variable_loads:
+        return {
+            "previous": previous,
+            "target_load": anchor_load,
+            "target_text": f"В прошлый раз веса различались. Опорный рабочий вес — {anchor_load:g} кг. Попробуй сделать с ним рабочие подходы в диапазоне {rep_min}–{rep_max}; если запас исчезает, снизь следующий подход.",
+            "decision": "normalise_load",
         }
     if below or (rir is not None and float(rir) < 1):
         return {
             "previous": previous,
-            "target_load": load,
-            "target_text": f"Вес пока не повышать. Повтори {load:g} кг и вернись в диапазон {rep_min}–{rep_max} с запасом.",
+            "target_load": anchor_load,
+            "target_text": f"Вес пока не повышать. Повтори {anchor_load:g} кг и вернись в диапазон {rep_min}–{rep_max} с запасом.",
             "decision": "hold",
         }
     if at_top and (rir is None or float(rir) >= 1):
-        new_load = float(load) + ex.increment
+        new_load = float(anchor_load) + ex.increment
         return {
             "previous": previous,
             "target_load": new_load,
@@ -170,8 +195,8 @@ def progression(previous: dict[str, Any] | None, ex: Exercise, target_sets: int,
         }
     return {
         "previous": previous,
-        "target_load": load,
-        "target_text": f"Оставить {float(load):g} кг и добавить 1–2 суммарных повтора, пока не выйдешь на {target_sets}×{rep_max}.",
+        "target_load": anchor_load,
+        "target_text": f"Оставить {float(anchor_load):g} кг и добавить 1–2 суммарных повтора, пока не выйдешь на {target_sets}×{rep_max}.",
         "decision": "add_reps",
     }
 
