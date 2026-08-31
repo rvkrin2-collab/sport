@@ -19,7 +19,9 @@ router = APIRouter(prefix="/api/strength", tags=["strength"])
 
 class ExerciseResult(BaseModel):
     exercise_key: str
+    # `load` is kept for backwards compatibility with already saved clients.
     load: float | None = Field(default=None, ge=0)
+    loads: list[float | None] = Field(default_factory=list, max_length=6)
     reps: list[int] = Field(default_factory=list, max_length=6)
     rir: float | None = Field(default=None, ge=0, le=5)
     pain: int | None = Field(default=None, ge=0, le=10)
@@ -66,6 +68,7 @@ def ensure_tables() -> None:
                 exercise_key TEXT NOT NULL,
                 load REAL,
                 reps_json TEXT NOT NULL,
+                loads_json TEXT,
                 rir REAL,
                 pain INTEGER,
                 note TEXT,
@@ -76,6 +79,9 @@ def ensure_tables() -> None:
                 ON strength_performance(exercise_key, session_number);
             """
         )
+        cols = {r["name"] for r in conn.execute("PRAGMA table_info(strength_performance)")}
+        if "loads_json" not in cols:
+            conn.execute("ALTER TABLE strength_performance ADD COLUMN loads_json TEXT")
 
 
 ensure_tables()
@@ -89,10 +95,21 @@ def next_number(conn: sqlite3.Connection) -> int | None:
     return None
 
 
+def _decode_loads(loads_json: str | None, legacy_load: float | None, reps: list[int]) -> list[float | None]:
+    if loads_json:
+        try:
+            values = json.loads(loads_json)
+            if isinstance(values, list):
+                return [None if x is None else float(x) for x in values[: len(reps)]]
+        except (TypeError, ValueError, json.JSONDecodeError):
+            pass
+    return [legacy_load for _ in reps]
+
+
 def previous_by_exercise(conn: sqlite3.Connection, number: int) -> dict[str, dict[str, Any]]:
     rows = conn.execute(
         """
-        SELECT p.exercise_key,p.load,p.reps_json,p.rir,p.pain,p.note,p.session_number,l.date
+        SELECT p.exercise_key,p.load,p.reps_json,p.loads_json,p.rir,p.pain,p.note,p.session_number,l.date
         FROM strength_performance p
         LEFT JOIN strength_workout_logs l ON l.number=p.session_number
         WHERE p.session_number < ?
@@ -105,11 +122,14 @@ def previous_by_exercise(conn: sqlite3.Connection, number: int) -> dict[str, dic
         key = r["exercise_key"]
         if key in result:
             continue
+        reps = json.loads(r["reps_json"] or "[]")
+        loads = _decode_loads(r["loads_json"], r["load"], reps)
         result[key] = {
             "session_number": r["session_number"],
             "date": r["date"],
             "load": r["load"],
-            "reps": json.loads(r["reps_json"] or "[]"),
+            "loads": loads,
+            "reps": reps,
             "rir": r["rir"],
             "pain": r["pain"],
             "note": r["note"],
@@ -118,7 +138,6 @@ def previous_by_exercise(conn: sqlite3.Connection, number: int) -> dict[str, dic
 
 
 def recovery_mode(conn: sqlite3.Connection) -> tuple[str, str | None]:
-    # Manual metrics override imported health when available for the same day.
     row = conn.execute(
         """
         SELECT d.date,
@@ -170,8 +189,6 @@ def recovery_mode(conn: sqlite3.Connection) -> tuple[str, str | None]:
     if score >= 1:
         return "yellow", ", ".join(reasons) if reasons else "умеренное недовосстановление"
 
-    # If a demanding run happened in the last 30 hours, keep the strength session
-    # but remove leg progression and one leg set.
     cutoff = (datetime.now() - timedelta(hours=30)).date().isoformat()
     recent = conn.execute(
         """
@@ -237,13 +254,29 @@ def strength_history() -> list[dict[str, Any]]:
         for s in sessions:
             s["exercises"] = []
             for r in conn.execute(
-                "SELECT exercise_key,load,reps_json,rir,pain,note FROM strength_performance WHERE session_number=? ORDER BY id",
+                "SELECT exercise_key,load,reps_json,loads_json,rir,pain,note FROM strength_performance WHERE session_number=? ORDER BY id",
                 (s["number"],),
             ):
                 x = dict(r)
-                x["reps"] = json.loads(x.pop("reps_json") or "[]")
+                reps = json.loads(x.pop("reps_json") or "[]")
+                x["reps"] = reps
+                x["loads"] = _decode_loads(x.pop("loads_json"), x.get("load"), reps)
                 s["exercises"].append(x)
     return sessions
+
+
+def _normalise_set_loads(ex: ExerciseResult) -> list[float | None]:
+    reps_count = len(ex.reps)
+    if ex.loads:
+        loads = list(ex.loads[:reps_count])
+        if len(loads) < reps_count:
+            loads.extend([None] * (reps_count - len(loads)))
+    else:
+        loads = [ex.load for _ in range(reps_count)]
+    for value in loads:
+        if value is not None and value < 0:
+            raise HTTPException(status_code=400, detail="Вес не может быть отрицательным")
+    return loads
 
 
 @router.post("/session")
@@ -275,12 +308,14 @@ def save_strength_session(payload: StrengthSessionResult) -> dict[str, Any]:
         )
         conn.execute("DELETE FROM strength_performance WHERE session_number=?", (payload.number,))
         for ex in payload.exercises:
+            loads = _normalise_set_loads(ex)
+            legacy_load = next((x for x in reversed(loads) if x is not None), ex.load)
             conn.execute(
                 """
-                INSERT INTO strength_performance(session_number,exercise_key,load,reps_json,rir,pain,note,created_at)
-                VALUES(?,?,?,?,?,?,?,?)
+                INSERT INTO strength_performance(session_number,exercise_key,load,reps_json,loads_json,rir,pain,note,created_at)
+                VALUES(?,?,?,?,?,?,?,?,?)
                 """,
-                (payload.number, ex.exercise_key, ex.load, json.dumps(ex.reps), ex.rir, ex.pain, ex.note, now_iso()),
+                (payload.number, ex.exercise_key, legacy_load, json.dumps(ex.reps), json.dumps(loads), ex.rir, ex.pain, ex.note, now_iso()),
             )
         conn.execute(
             "INSERT OR REPLACE INTO strength_sessions(number,completed_at) VALUES(?,?)",
