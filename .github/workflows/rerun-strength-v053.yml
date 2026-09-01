@@ -1,0 +1,54 @@
+name: rerun-strength-v053
+
+on:
+  push:
+    paths:
+      - '.github/workflows/rerun-strength-v053.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  rerun:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Reuse tested patch steps
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          src=Path('.github/workflows/upgrade-strength-v053.yml').read_text(encoding='utf-8')
+          def extract(name, out):
+              start=src.index(f'      - name: {name}')
+              run=src.index('        run: |\n', start)+len('        run: |\n')
+              end=src.find('\n      - name:', run)
+              if end < 0: end=len(src)
+              block=src[run:end]
+              lines=[]
+              for line in block.splitlines():
+                  lines.append(line[10:] if line.startswith('          ') else line)
+              Path(out).write_text('\n'.join(lines)+'\n',encoding='utf-8')
+          extract('Patch strength model and API','/tmp/patch.sh')
+          extract('Replace strength UI','/tmp/ui.sh')
+          PY
+          bash /tmp/patch.sh
+          bash /tmp/ui.sh
+          python -m py_compile backend/strength_api.py backend/strength_plan.py
+          node --check strength-ui.js
+          grep -q 'Планка на предплечьях' backend/strength_plan.py
+          grep -q 'strength_record' backend/strength_api.py
+          grep -q 'Время, сек' strength-ui.js
+          grep -q 'Править' strength-ui.js
+      - name: Commit code only
+        run: |
+          git config user.name "sport-bot"
+          git config user.email "sport-bot@users.noreply.github.com"
+          git add backend/strength_plan.py backend/strength_api.py strength-ui.js strength-ui.css index.html
+          if git diff --cached --quiet; then
+            echo "Already upgraded"
+          else
+            git commit -m "Add editable strength history and timed planks v0.5.3"
+            git push origin main
+          fi
