@@ -16,6 +16,7 @@ class Exercise:
     load_hint: str
     notes: str
     leg_stress: bool = False
+    measure: str = "reps"
 
 
 EXERCISES: dict[str, Exercise] = {
@@ -43,6 +44,10 @@ EXERCISES: dict[str, Exercise] = {
         "dead_bug", "Dead bug / мёртвый жук", "core", 8, 12, 2, 0,
         "без веса", "Повторы на сторону, поясница прижата.", False,
     ),
+    "front_plank": Exercise(
+        "front_plank", "Планка на предплечьях", "core", 30, 60, 2, 0,
+        "секунды", "Локти под плечами, корпус прямой, шея нейтрально. Не задерживать дыхание.", False, "time",
+    ),
     "hip_thrust": Exercise(
         "hip_thrust", "Ягодичный мост / hip thrust", "hinge", 8, 12, 3, 5,
         "общий вес", "Движение тазом, не переразгибать поясницу и шею.", True,
@@ -65,11 +70,11 @@ EXERCISES: dict[str, Exercise] = {
     ),
     "side_plank": Exercise(
         "side_plank", "Боковая планка", "core", 25, 45, 2, 0,
-        "секунды", "Время на сторону.", False,
+        "секунды", "Время на сторону.", False, "time",
     ),
 }
 
-A = ["leg_press", "incline_db_press", "lat_pulldown", "seated_row", "lateral_raise", "dead_bug"]
+A = ["leg_press", "incline_db_press", "lat_pulldown", "seated_row", "lateral_raise", "front_plank"]
 B = ["hip_thrust", "reverse_lunge", "chest_supported_row", "pushup", "rear_delt", "side_plank"]
 
 
@@ -133,6 +138,35 @@ def progression(previous: dict[str, Any] | None, ex: Exercise, target_sets: int,
             "target_load": None,
             "target_text": f"Подбери вес на {target_sets}×{rep_min}–{rep_max}, оставляя 2–3 повтора в запасе.",
             "decision": "baseline",
+        }
+
+    if ex.measure == "time":
+        reps = previous.get("reps") or []
+        pain = previous.get("pain") or 0
+        completed = len(reps) >= max(1, target_sets)
+        at_top = completed and all(int(r) >= rep_max for r in reps[:target_sets])
+        if pain >= 3:
+            return {
+                "previous": previous, "target_load": None,
+                "target_text": "Боль ≥3/10 в прошлый раз: не увеличивай время; сократи подход или замени упражнение.",
+                "decision": "pain",
+            }
+        if not allow_progression:
+            return {
+                "previous": previous, "target_load": None,
+                "target_text": f"Сегодня без прогрессии: {target_sets}×{rep_min}–{rep_max} сек в комфортной технике.",
+                "decision": "hold_fatigue",
+            }
+        if at_top:
+            return {
+                "previous": previous, "target_load": None,
+                "target_text": f"Сохрани {target_sets}×{rep_max} сек с ровным корпусом и спокойным дыханием.",
+                "decision": "hold_time",
+            }
+        return {
+            "previous": previous, "target_load": None,
+            "target_text": f"Добавь 5–10 секунд суммарно. Рабочий диапазон: {target_sets}×{rep_min}–{rep_max} сек.",
+            "decision": "add_time",
         }
 
     reps = previous.get("reps") or []
@@ -223,6 +257,7 @@ def build_prescription(number: int, previous_by_exercise: dict[str, dict[str, An
             "rir_target": phase["rir"],
             "load_hint": ex.load_hint,
             "notes": ex.notes,
+            "measure": ex.measure,
             **target,
         })
     return {

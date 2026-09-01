@@ -10,7 +10,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
-from backend.strength_plan import build_prescription, phase_for
+from backend.strength_plan import EXERCISES, build_prescription, phase_for, session_template
 
 ROOT = Path(__file__).resolve().parent.parent
 DB_PATH = ROOT / "data" / "sport.db"
@@ -261,8 +261,66 @@ def strength_history() -> list[dict[str, Any]]:
                 reps = json.loads(x.pop("reps_json") or "[]")
                 x["reps"] = reps
                 x["loads"] = _decode_loads(x.pop("loads_json"), x.get("load"), reps)
+                meta = EXERCISES.get(x["exercise_key"])
+                x["name"] = meta.name if meta else x["exercise_key"]
+                x["measure"] = meta.measure if meta else "reps"
                 s["exercises"].append(x)
     return sessions
+
+
+@router.get("/record/{number}")
+def strength_record(number: int) -> dict[str, Any]:
+    if not 1 <= number <= 24:
+        raise HTTPException(status_code=404, detail="Session must be 1..24")
+    ensure_tables()
+    with connect() as conn:
+        log = conn.execute("SELECT * FROM strength_workout_logs WHERE number=?", (number,)).fetchone()
+        if not log:
+            raise HTTPException(status_code=404, detail="Силовая тренировка не найдена")
+        prev = previous_by_exercise(conn, number)
+        rows = conn.execute(
+            "SELECT exercise_key,load,reps_json,loads_json,rir,pain,note FROM strength_performance WHERE session_number=? ORDER BY id",
+            (number,),
+        ).fetchall()
+
+    saved: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        reps = json.loads(row["reps_json"] or "[]")
+        loads = _decode_loads(row["loads_json"], row["load"], reps)
+        meta = EXERCISES.get(row["exercise_key"])
+        saved[row["exercise_key"]] = {
+            "exercise_key": row["exercise_key"],
+            "name": meta.name if meta else row["exercise_key"],
+            "measure": meta.measure if meta else "reps",
+            "reps": reps,
+            "loads": loads,
+            "rir": row["rir"],
+            "pain": row["pain"],
+            "note": row["note"],
+        }
+
+    fatigue = log["fatigue_mode"] or "green"
+    if fatigue not in {"green", "yellow", "post_hard_run", "red"}:
+        fatigue = "green"
+    plan = build_prescription(number, prev, fatigue_mode=fatigue)
+
+    # Preserve legacy dead-bug records exactly when editing old sessions, while
+    # all new A sessions use the much simpler timed forearm plank.
+    if "dead_bug" in saved and "front_plank" not in saved:
+        legacy = EXERCISES["dead_bug"]
+        for i, ex in enumerate(plan["exercises"]):
+            if ex["key"] == "front_plank":
+                plan["exercises"][i] = {
+                    "key": legacy.key, "name": legacy.name, "sets": max(2, len(saved["dead_bug"]["reps"])),
+                    "rep_min": legacy.rep_min, "rep_max": legacy.rep_max, "rir_target": plan["phase"]["rir"],
+                    "load_hint": legacy.load_hint, "notes": legacy.notes, "measure": legacy.measure,
+                    "previous": prev.get(legacy.key), "target_load": None,
+                    "target_text": "Старая запись. Для новых тренировок это упражнение заменено планкой.",
+                    "decision": "legacy",
+                }
+                break
+
+    return {"log": dict(log), "plan": plan, "saved": saved}
 
 
 def _normalise_set_loads(ex: ExerciseResult) -> list[float | None]:
@@ -287,8 +345,19 @@ def save_strength_session(payload: StrengthSessionResult) -> dict[str, Any]:
     except ValueError as exc:
         raise HTTPException(status_code=400, detail="Invalid date") from exc
 
-    plan = prescription(payload.number)
-    known = {x["key"] for x in plan["exercises"]}
+    with connect() as conn:
+        existing_log = conn.execute("SELECT * FROM strength_workout_logs WHERE number=?", (payload.number,)).fetchone()
+        prev = previous_by_exercise(conn, payload.number)
+    if existing_log:
+        mode = existing_log["fatigue_mode"] or "green"
+        if mode not in {"green", "yellow", "post_hard_run", "red"}:
+            mode = "green"
+        plan = build_prescription(payload.number, prev, fatigue_mode=mode)
+        if payload.date is None:
+            session_date = date.fromisoformat(existing_log["date"])
+    else:
+        plan = prescription(payload.number)
+    known = set(EXERCISES)
     unknown = [x.exercise_key for x in payload.exercises if x.exercise_key not in known]
     if unknown:
         raise HTTPException(status_code=400, detail=f"Unknown exercise: {unknown[0]}")

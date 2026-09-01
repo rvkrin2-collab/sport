@@ -22,3 +22,10 @@
 .strength-inputs--feedback{max-width:520px}
 @media(max-width:820px){.strength-coach__head,.strength-coach__footer{align-items:flex-start;flex-direction:column}.strength-exercise{grid-template-columns:34px 1fr}.strength-exercise__title{align-items:flex-start;flex-direction:column;gap:5px}.strength-set-row{grid-template-columns:68px 1fr 1fr}.strength-inputs{grid-template-columns:1fr 1fr}}
 @media(max-width:480px){.strength-set-row{grid-template-columns:1fr 1fr}.strength-set-label{grid-column:1/-1;padding-bottom:0}.strength-inputs{grid-template-columns:1fr}}
+.strength-actions{display:flex;gap:8px;flex-wrap:wrap}
+.strength-set-row--time{grid-template-columns:90px minmax(140px,220px)}
+.strength-history{display:grid;gap:10px;margin-top:14px}
+.strength-history-item{display:flex;justify-content:space-between;gap:16px;align-items:flex-start;padding:14px;background:#11151a;border:1px solid var(--line);border-radius:14px}
+.strength-history-summary{margin-top:6px;line-height:1.55}
+.strength-edit-btn{flex:0 0 auto}
+@media(max-width:820px){.strength-history-item{flex-direction:column}.strength-set-row--time{grid-template-columns:1fr 1fr}}
