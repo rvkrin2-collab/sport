@@ -248,14 +248,36 @@ def strength_roadmap() -> list[dict[str, Any]]:
 def strength_history() -> list[dict[str, Any]]:
     ensure_tables()
     with connect() as conn:
-        sessions = [dict(r) for r in conn.execute(
-            "SELECT * FROM strength_workout_logs ORDER BY number DESC"
+        marks = [dict(r) for r in conn.execute(
+            "SELECT number,completed_at FROM strength_sessions WHERE number BETWEEN 1 AND 24 ORDER BY number DESC"
         )]
-        for s in sessions:
+        logs = {r["number"]: dict(r) for r in conn.execute(
+            "SELECT * FROM strength_workout_logs WHERE number BETWEEN 1 AND 24"
+        )}
+        sessions: list[dict[str, Any]] = []
+        for mark in marks:
+            n = int(mark["number"])
+            s = logs.get(n)
+            if s is None:
+                completed_at = mark.get("completed_at") or now_iso()
+                s = {
+                    "number": n,
+                    "date": str(completed_at)[:10],
+                    "workout_type": "A" if n % 2 else "B",
+                    "phase": phase_for(n)["name"],
+                    "fatigue_mode": None,
+                    "overall_rpe": None,
+                    "notes": None,
+                    "completed_at": completed_at,
+                    "updated_at": completed_at,
+                    "legacy_only": True,
+                }
+            else:
+                s["legacy_only"] = False
             s["exercises"] = []
             for r in conn.execute(
                 "SELECT exercise_key,load,reps_json,loads_json,rir,pain,note FROM strength_performance WHERE session_number=? ORDER BY id",
-                (s["number"],),
+                (n,),
             ):
                 x = dict(r)
                 reps = json.loads(x.pop("reps_json") or "[]")
@@ -265,6 +287,7 @@ def strength_history() -> list[dict[str, Any]]:
                 x["name"] = meta.name if meta else x["exercise_key"]
                 x["measure"] = meta.measure if meta else "reps"
                 s["exercises"].append(x)
+            sessions.append(s)
     return sessions
 
 
@@ -274,14 +297,33 @@ def strength_record(number: int) -> dict[str, Any]:
         raise HTTPException(status_code=404, detail="Session must be 1..24")
     ensure_tables()
     with connect() as conn:
-        log = conn.execute("SELECT * FROM strength_workout_logs WHERE number=?", (number,)).fetchone()
-        if not log:
+        log_row = conn.execute("SELECT * FROM strength_workout_logs WHERE number=?", (number,)).fetchone()
+        mark = conn.execute("SELECT number,completed_at FROM strength_sessions WHERE number=?", (number,)).fetchone()
+        if not log_row and not mark:
             raise HTTPException(status_code=404, detail="Силовая тренировка не найдена")
         prev = previous_by_exercise(conn, number)
         rows = conn.execute(
             "SELECT exercise_key,load,reps_json,loads_json,rir,pain,note FROM strength_performance WHERE session_number=? ORDER BY id",
             (number,),
         ).fetchall()
+
+    if log_row:
+        log = dict(log_row)
+        log["legacy_only"] = False
+    else:
+        completed_at = mark["completed_at"] or now_iso()
+        log = {
+            "number": number,
+            "date": str(completed_at)[:10],
+            "workout_type": "A" if number % 2 else "B",
+            "phase": phase_for(number)["name"],
+            "fatigue_mode": "green",
+            "overall_rpe": None,
+            "notes": None,
+            "completed_at": completed_at,
+            "updated_at": completed_at,
+            "legacy_only": True,
+        }
 
     saved: dict[str, dict[str, Any]] = {}
     for row in rows:
@@ -299,13 +341,11 @@ def strength_record(number: int) -> dict[str, Any]:
             "note": row["note"],
         }
 
-    fatigue = log["fatigue_mode"] or "green"
+    fatigue = log.get("fatigue_mode") or "green"
     if fatigue not in {"green", "yellow", "post_hard_run", "red"}:
         fatigue = "green"
     plan = build_prescription(number, prev, fatigue_mode=fatigue)
 
-    # Preserve legacy dead-bug records exactly when editing old sessions, while
-    # all new A sessions use the much simpler timed forearm plank.
     if "dead_bug" in saved and "front_plank" not in saved:
         legacy = EXERCISES["dead_bug"]
         for i, ex in enumerate(plan["exercises"]):
@@ -320,7 +360,7 @@ def strength_record(number: int) -> dict[str, Any]:
                 }
                 break
 
-    return {"log": dict(log), "plan": plan, "saved": saved}
+    return {"log": log, "plan": plan, "saved": saved}
 
 
 def _normalise_set_loads(ex: ExerciseResult) -> list[float | None]:

@@ -1,4 +1,4 @@
-// v0.5.3 adaptive strength coach: per-set loads, timed planks, editable history.
+// v0.5.4 adaptive strength coach: per-set loads, timed planks, editable history.
 (function(){
   let editingNumber=null;
   let editingDate=null;
@@ -129,7 +129,7 @@
       const rows=await api('strength/history');
       const box=document.querySelector('#strengthHistory'); if(!box)return;
       if(!rows.length){box.innerHTML='<div class="tiny">Завершённых силовых пока нет.</div>';return;}
-      box.innerHTML=rows.map(s=>`<div class="strength-history-item"><div><strong>№${s.number} · ${escapeHtml(s.workout_type)} · ${escapeHtml(s.date)}</strong><div class="tiny strength-history-summary">${(s.exercises||[]).map(historyExerciseText).join('<br>')}</div></div><button class="ghost strength-edit-btn" data-edit-strength="${s.number}">Править</button></div>`).join('');
+      box.innerHTML=rows.map(s=>`<div class="strength-history-item"><div><strong>№${s.number} · ${escapeHtml(s.workout_type)} · ${escapeHtml(s.date)}</strong><div class="tiny strength-history-summary">${(s.exercises||[]).length?(s.exercises||[]).map(historyExerciseText).join('<br>'):'Нет детализации подходов — нажми «Править» и внеси фактические результаты.'}</div></div><button class="ghost strength-edit-btn" data-edit-strength="${s.number}">Править</button></div>`).join('');
       box.querySelectorAll('[data-edit-strength]').forEach(btn=>btn.addEventListener('click',()=>editStrength(Number(btn.dataset.editStrength))));
     }catch(e){ const box=document.querySelector('#strengthHistory'); if(box)box.textContent='Не удалось загрузить историю: '+e.message; }
   }
