@@ -1,0 +1,149 @@
+name: fix-strength-edit-v055
+
+on:
+  push:
+    paths:
+      - '.github/workflows/fix-strength-edit-v055.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Patch API errors, cache versions and edit smoke test
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import re
+
+          p = Path('app.js')
+          text = p.read_text(encoding='utf-8')
+          old = '''function apiPath(path){ return `api/${path}`; }
+async function api(path, options={}){
+  const r = await fetch(apiPath(path), {
+    headers:{'Content-Type':'application/json', ...(options.headers||{})},
+    cache:'no-store',
+    ...options
+  });
+  if(!r.ok){
+    let detail='';
+    try{ detail=(await r.json()).detail || ''; }catch{}
+    throw new Error(detail || `${r.status} ${r.statusText}`);
+  }
+  return r.json();
+}
+'''
+          new = '''function apiPath(path){ return `api/${path}`; }
+function formatApiDetail(detail){
+  if(detail===null || detail===undefined || detail==='') return '';
+  if(typeof detail==='string') return detail;
+  if(Array.isArray(detail)){
+    return detail.map(item=>{
+      if(typeof item==='string') return item;
+      if(item && typeof item==='object'){
+        const loc=Array.isArray(item.loc)?item.loc.filter(x=>x!=='body').join(' → '):'';
+        const msg=item.msg || item.message || item.detail || JSON.stringify(item);
+        return loc?`${loc}: ${msg}`:String(msg);
+      }
+      return String(item);
+    }).join('; ');
+  }
+  if(typeof detail==='object'){
+    if(typeof detail.message==='string') return detail.message;
+    if(typeof detail.msg==='string') return detail.msg;
+    try{return JSON.stringify(detail)}catch{return 'Неизвестная ошибка сервера'}
+  }
+  return String(detail);
+}
+async function api(path, options={}){
+  const r = await fetch(apiPath(path), {
+    headers:{'Content-Type':'application/json', ...(options.headers||{})},
+    cache:'no-store',
+    ...options
+  });
+  if(!r.ok){
+    let payload=null;
+    try{ payload=await r.json(); }catch{}
+    const detail=payload?.detail ?? payload?.message ?? payload?.error ?? payload;
+    throw new Error(formatApiDetail(detail) || `${r.status} ${r.statusText}`);
+  }
+  return r.json();
+}
+'''
+          if old not in text:
+              raise SystemExit('api block not found; refusing blind patch')
+          text = text.replace(old, new, 1)
+          p.write_text(text, encoding='utf-8')
+
+          p = Path('index.html')
+          text = p.read_text(encoding='utf-8')
+          text = re.sub(r'app\.js\?v=[^"\']+', 'app.js?v=0.5.5', text)
+          text = re.sub(r'strength-ui\.js\?v=[^"\']+', 'strength-ui.js?v=0.5.5', text)
+          p.write_text(text, encoding='utf-8')
+
+          p = Path('backend/main.py')
+          text = p.read_text(encoding='utf-8')
+          text = re.sub(r'app = FastAPI\(title="Sport Dashboard", version="[^"]+"\)', 'app = FastAPI(title="Sport Dashboard", version="0.5.5")', text)
+          text = re.sub(r'\{"ok":True,"version":"[^"]+","db":str\(DB_PATH\)\}', '{"ok":True,"version":"0.5.5","db":str(DB_PATH)}', text)
+          p.write_text(text, encoding='utf-8')
+
+          p = Path('.github/workflows/test.yml')
+          text = p.read_text(encoding='utf-8')
+          if 'node --check strength-ui.js' not in text:
+              text = text.replace('      - run: node --check body-ui.js\n', '      - run: node --check body-ui.js\n      - run: node --check strength-ui.js\n')
+          marker = "              assert client.delete('/api/body/photos/'+photo['id']).status_code == 200\n"
+          if 'legacy strength edit smoke' not in text:
+              addition = '''              # legacy strength edit smoke: an old completed marker with no detailed log
+              # must be visible/editable and accept timed plank data.
+              from backend.strength_api import connect as strength_connect
+              with strength_connect() as conn:
+                  conn.execute("INSERT OR REPLACE INTO strength_sessions(number,completed_at) VALUES(?,?)", (1, '2026-08-31T10:00:00'))
+                  conn.execute("DELETE FROM strength_workout_logs WHERE number=1")
+                  conn.execute("DELETE FROM strength_performance WHERE session_number=1")
+              hist = client.get('/api/strength/history')
+              assert hist.status_code == 200, hist.text
+              assert any(x['number'] == 1 for x in hist.json()), hist.text
+              rec = client.get('/api/strength/record/1')
+              assert rec.status_code == 200, rec.text
+              assert rec.json()['log']['legacy_only'] is True
+              edit_payload = {
+                  'number': 1,
+                  'date': '2026-08-31',
+                  'exercises': [
+                      {'exercise_key':'leg_press','loads':[80,85],'reps':[12,10],'rir':2,'pain':0},
+                      {'exercise_key':'incline_db_press','loads':[16,18],'reps':[12,10],'rir':2,'pain':0},
+                      {'exercise_key':'lat_pulldown','loads':[45,50],'reps':[12,10],'rir':2,'pain':0},
+                      {'exercise_key':'seated_row','loads':[45,50],'reps':[12,10],'rir':2,'pain':0},
+                      {'exercise_key':'lateral_raise','loads':[6,6],'reps':[15,14],'rir':2,'pain':0},
+                      {'exercise_key':'front_plank','loads':[None,None],'reps':[45,40],'rir':None,'pain':0},
+                  ],
+              }
+              edited = client.post('/api/strength/session', json=edit_payload)
+              assert edited.status_code == 200, edited.text
+              rec2 = client.get('/api/strength/record/1')
+              assert rec2.status_code == 200, rec2.text
+              assert rec2.json()['saved']['front_plank']['reps'] == [45, 40]
+              assert rec2.json()['saved']['front_plank']['loads'] == [None, None]
+              print('legacy strength edit smoke ok')
+'''
+              if marker not in text:
+                  raise SystemExit('test insertion marker not found')
+              text = text.replace(marker, marker + addition, 1)
+          p.write_text(text, encoding='utf-8')
+          PY
+      - name: Commit patch
+        run: |
+          git config user.name "sport-bot"
+          git config user.email "sport-bot@users.noreply.github.com"
+          git add app.js index.html backend/main.py .github/workflows/test.yml
+          if git diff --cached --quiet; then
+            echo "Already patched"
+          else
+            git commit -m "Fix strength edit errors and legacy edit flow v0.5.5"
+            git push origin main
+          fi
