@@ -1,0 +1,52 @@
+name: fix-api-error-display-v052
+
+on:
+  push:
+    paths:
+      - '.github/workflows/fix-api-error-display-v052.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Make API validation errors readable and test per-set save
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          p = Path('app.js')
+          text = p.read_text(encoding='utf-8')
+          old = """  if(!r.ok){\n    let detail='';\n    try{ detail=(await r.json()).detail || ''; }catch{}\n    throw new Error(detail || `${r.status} ${r.statusText}`);\n  }"""
+          new = """  if(!r.ok){\n    let detail='';\n    try{\n      const payload=await r.json();\n      const raw=payload?.detail ?? payload?.message ?? '';\n      if(Array.isArray(raw)){\n        detail=raw.map(x=>{\n          if(typeof x==='string') return x;\n          const where=Array.isArray(x?.loc)?x.loc.filter(v=>v!=='body').join(' → '):'';\n          return `${where?where+': ':''}${x?.msg || JSON.stringify(x)}`;\n        }).join('; ');\n      }else if(raw && typeof raw==='object'){\n        detail=raw.msg || raw.message || JSON.stringify(raw);\n      }else detail=String(raw||'');\n    }catch{}\n    throw new Error(detail || `${r.status} ${r.statusText}`);\n  }"""
+          if old not in text:
+              raise SystemExit('api error block not found')
+          text = text.replace(old, new, 1)
+          p.write_text(text, encoding='utf-8')
+
+          p = Path('index.html')
+          text = p.read_text(encoding='utf-8').replace('app.js?v=0.5.1','app.js?v=0.5.2')
+          p.write_text(text, encoding='utf-8')
+
+          p = Path('.github/workflows/test.yml')
+          text = p.read_text(encoding='utf-8')
+          if 'per-set-save-ok' not in text:
+              needle = "              assert len(data['next']['exercises']) == 6\n"
+              insert = """              assert len(data['next']['exercises']) == 6\n\n              # Per-set weights must be accepted and persisted.\n              strength_payload = {\n                  'number': 1,\n                  'date': '2026-08-31',\n                  'exercises': [\n                      {'exercise_key': 'leg_press', 'loads': [60, 70], 'reps': [12, 10], 'rir': 2, 'pain': 0},\n                      {'exercise_key': 'incline_db_press', 'loads': [16, 18], 'reps': [12, 10], 'rir': 2, 'pain': 0},\n                      {'exercise_key': 'lat_pulldown', 'loads': [45, 50], 'reps': [12, 10], 'rir': 2, 'pain': 0},\n                  ],\n              }\n              saved = client.post('/api/strength/session', json=strength_payload)\n              assert saved.status_code == 200, saved.text\n              hist = client.get('/api/strength/history')\n              assert hist.status_code == 200, hist.text\n              first = hist.json()[0]\n              leg = next(x for x in first['exercises'] if x['exercise_key'] == 'leg_press')\n              assert leg['loads'] == [60.0, 70.0], leg\n              print('per-set-save-ok')\n"""
+              if needle not in text:
+                  raise SystemExit('test insertion point not found')
+              text = text.replace(needle, insert, 1)
+              p.write_text(text, encoding='utf-8')
+          PY
+      - name: Commit fix
+        run: |
+          git config user.name "sport-bot"
+          git config user.email "sport-bot@users.noreply.github.com"
+          git add app.js index.html .github/workflows/test.yml
+          git commit -m "Fix strength save validation errors v0.5.2"
+          git push origin main
