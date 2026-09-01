@@ -1,7 +1,44 @@
-// v0.5.4 adaptive strength coach: per-set loads, timed planks, editable history.
+// v0.5.5 adaptive strength coach: per-set loads, timed planks, editable history, readable API errors.
 (function(){
   let editingNumber=null;
   let editingDate=null;
+
+  function formatStrengthError(detail){
+    if(detail===null || detail===undefined || detail==='') return '';
+    if(typeof detail==='string') return detail;
+    if(Array.isArray(detail)){
+      return detail.map(item=>{
+        if(typeof item==='string') return item;
+        if(item && typeof item==='object'){
+          const loc=Array.isArray(item.loc)?item.loc.filter(x=>x!=='body').join(' → '):'';
+          const msg=item.msg || item.message || item.detail || (()=>{try{return JSON.stringify(item)}catch{return 'Ошибка данных'}})();
+          return loc?`${loc}: ${msg}`:String(msg);
+        }
+        return String(item);
+      }).join('; ');
+    }
+    if(typeof detail==='object'){
+      if(typeof detail.message==='string') return detail.message;
+      if(typeof detail.msg==='string') return detail.msg;
+      try{return JSON.stringify(detail)}catch{return 'Неизвестная ошибка сервера'}
+    }
+    return String(detail);
+  }
+
+  async function strengthApi(path, options={}){
+    const r=await fetch(`api/${path}`,{
+      headers:{'Content-Type':'application/json',...(options.headers||{})},
+      cache:'no-store',
+      ...options
+    });
+    if(!r.ok){
+      let payload=null;
+      try{payload=await r.json();}catch{}
+      const detail=payload?.detail ?? payload?.message ?? payload?.error ?? payload;
+      throw new Error(formatStrengthError(detail) || `${r.status} ${r.statusText}`);
+    }
+    return r.json();
+  }
 
   function measureLabel(ex){ return ex.measure==='time'?'сек':'повт.'; }
   function targetLabel(ex){
@@ -113,7 +150,7 @@
     injectStrengthCoach();
     if(typeof apiOnline==='undefined'||!apiOnline) return;
     try{
-      const data=await api('strength/current'); editingNumber=null; editingDate=null; renderPlan(data.next,{},false);
+      const data=await strengthApi('strength/current'); editingNumber=null; editingDate=null; renderPlan(data.next,{},false);
     }catch(e){ const t=document.querySelector('#strengthPlanTitle'); if(t)t.textContent='Не удалось загрузить силовой план'; const m=document.querySelector('#strengthSaveMessage'); if(m)m.textContent=e.message; }
   }
 
@@ -126,7 +163,7 @@
   async function loadStrengthHistory(){
     if(typeof apiOnline==='undefined'||!apiOnline) return;
     try{
-      const rows=await api('strength/history');
+      const rows=await strengthApi('strength/history');
       const box=document.querySelector('#strengthHistory'); if(!box)return;
       if(!rows.length){box.innerHTML='<div class="tiny">Завершённых силовых пока нет.</div>';return;}
       box.innerHTML=rows.map(s=>`<div class="strength-history-item"><div><strong>№${s.number} · ${escapeHtml(s.workout_type)} · ${escapeHtml(s.date)}</strong><div class="tiny strength-history-summary">${(s.exercises||[]).length?(s.exercises||[]).map(historyExerciseText).join('<br>'):'Нет детализации подходов — нажми «Править» и внеси фактические результаты.'}</div></div><button class="ghost strength-edit-btn" data-edit-strength="${s.number}">Править</button></div>`).join('');
@@ -135,7 +172,7 @@
   }
   async function editStrength(number){
     try{
-      const data=await api(`strength/record/${number}`); editingNumber=number; editingDate=data.log.date; renderPlan(data.plan,data.saved||{},true); document.querySelector('#adaptiveStrength').scrollIntoView({behavior:'smooth',block:'start'});
+      const data=await strengthApi(`strength/record/${number}`); editingNumber=number; editingDate=data.log.date; renderPlan(data.plan,data.saved||{},true); document.querySelector('#adaptiveStrength').scrollIntoView({behavior:'smooth',block:'start'});
     }catch(e){ const m=document.querySelector('#strengthSaveMessage'); if(m){m.textContent=e.message;m.className='tiny error-text';} }
   }
 
@@ -151,19 +188,34 @@
         const value=Number(raw); if(!Number.isFinite(value)||value<=0)return;
         reps.push(Math.round(value));
         if((ex.measure||'reps')==='time') loads.push(null);
-        else { const l=setRow.querySelector('.s-load')?.value; loads.push(l===''?null:Number(l)); }
+        else {
+          const l=setRow.querySelector('.s-load')?.value;
+          const parsed=l===''?null:Number(l);
+          loads.push(parsed!==null&&Number.isFinite(parsed)?parsed:null);
+        }
       });
       if(!reps.length)return;
       const rr=row.querySelector('.s-rir')?.value, pp=row.querySelector('.s-pain')?.value;
+      const parsedRir=rr===''||rr===undefined?null:Number(rr);
+      const parsedPain=pp===''||pp===undefined?0:Number(pp);
       const lastLoad=[...loads].reverse().find(x=>x!==null&&Number.isFinite(x));
-      exercises.push({exercise_key:ex.key,load:lastLoad===undefined?null:lastLoad,loads,reps,rir:rr===''||rr===undefined?null:Number(rr),pain:pp===''||pp===undefined?0:Number(pp),note:null});
+      exercises.push({
+        exercise_key:ex.key,
+        load:lastLoad===undefined?null:lastLoad,
+        loads,
+        reps,
+        rir:parsedRir!==null&&Number.isFinite(parsedRir)?parsedRir:null,
+        pain:Number.isFinite(parsedPain)?Math.round(parsedPain):0,
+        note:null
+      });
     });
     if(exercises.length<3){const m=document.querySelector('#strengthSaveMessage');m.textContent='Заполни рабочие подходы хотя бы в трёх упражнениях.';m.className='tiny error-text';return;}
     const btn=document.querySelector('#saveStrengthSession'); btn.disabled=true; btn.textContent='Сохраняю…';
+    const wasEditing=editingNumber!==null;
+    const number=editingNumber||plan.number;
     try{
-      const number=editingNumber||plan.number;
-      const res=await api('strength/session',{method:'POST',body:JSON.stringify({number,date:editingDate||new Date().toISOString().slice(0,10),exercises})});
-      const m=document.querySelector('#strengthSaveMessage'); m.textContent=editingNumber?`Тренировка №${number} исправлена. Следующий план пересчитан.`:(res.completed?'Сохранено. 24/24 — цикл завершён.':`Сохранено. План тренировки №${res.next.number} уже пересчитан.`); m.className='tiny ok-text';
+      const res=await strengthApi('strength/session',{method:'POST',body:JSON.stringify({number,date:editingDate||new Date().toISOString().slice(0,10),exercises})});
+      const m=document.querySelector('#strengthSaveMessage'); m.textContent=wasEditing?`Тренировка №${number} исправлена. Следующий план пересчитан.`:(res.completed?'Сохранено. 24/24 — цикл завершён.':`Сохранено. План тренировки №${res.next.number} уже пересчитан.`); m.className='tiny ok-text';
       editingNumber=null; editingDate=null;
       if(typeof refreshServerState==='function') await refreshServerState(); await loadStrengthPlan(); await loadStrengthHistory();
     }catch(e){const m=document.querySelector('#strengthSaveMessage');m.textContent=e.message;m.className='tiny error-text';}
