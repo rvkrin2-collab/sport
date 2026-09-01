@@ -1,0 +1,321 @@
+name: upgrade-strength-v053
+
+on:
+  push:
+    paths:
+      - '.github/workflows/upgrade-strength-v053.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  upgrade:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Patch strength model and API
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          # --- strength_plan.py ---
+          p = Path('backend/strength_plan.py')
+          s = p.read_text(encoding='utf-8')
+          s = s.replace(
+              '    notes: str\n    leg_stress: bool = False\n',
+              '    notes: str\n    leg_stress: bool = False\n    measure: str = "reps"\n',
+          )
+          if '"front_plank": Exercise(' not in s:
+              anchor = '''    "dead_bug": Exercise(\n        "dead_bug", "Dead bug / мёртвый жук", "core", 8, 12, 2, 0,\n        "без веса", "Повторы на сторону, поясница прижата.", False,\n    ),\n'''
+              replacement = anchor + '''    "front_plank": Exercise(\n        "front_plank", "Планка на предплечьях", "core", 30, 60, 2, 0,\n        "секунды", "Локти под плечами, корпус прямой, шея нейтрально. Не задерживать дыхание.", False, "time",\n    ),\n'''
+              if anchor not in s:
+                  raise SystemExit('dead_bug anchor not found')
+              s = s.replace(anchor, replacement, 1)
+          s = s.replace(
+              '        "секунды", "Время на сторону.", False,\n',
+              '        "секунды", "Время на сторону.", False, "time",\n',
+          )
+          s = s.replace(
+              'A = ["leg_press", "incline_db_press", "lat_pulldown", "seated_row", "lateral_raise", "dead_bug"]',
+              'A = ["leg_press", "incline_db_press", "lat_pulldown", "seated_row", "lateral_raise", "front_plank"]',
+          )
+          # Time-based core progression: seconds only, no fake kg/reps language.
+          marker = '    reps = previous.get("reps") or []\n    rir = previous.get("rir")\n'
+          if 'if ex.measure == "time":' not in s:
+              timed = '''    if ex.measure == "time":\n        reps = previous.get("reps") or []\n        pain = previous.get("pain") or 0\n        completed = len(reps) >= max(1, target_sets)\n        at_top = completed and all(int(r) >= rep_max for r in reps[:target_sets])\n        if pain >= 3:\n            return {\n                "previous": previous, "target_load": None,\n                "target_text": "Боль ≥3/10 в прошлый раз: не увеличивай время; сократи подход или замени упражнение.",\n                "decision": "pain",\n            }\n        if not allow_progression:\n            return {\n                "previous": previous, "target_load": None,\n                "target_text": f"Сегодня без прогрессии: {target_sets}×{rep_min}–{rep_max} сек в комфортной технике.",\n                "decision": "hold_fatigue",\n            }\n        if at_top:\n            return {\n                "previous": previous, "target_load": None,\n                "target_text": f"Сохрани {target_sets}×{rep_max} сек с ровным корпусом и спокойным дыханием.",\n                "decision": "hold_time",\n            }\n        return {\n            "previous": previous, "target_load": None,\n            "target_text": f"Добавь 5–10 секунд суммарно. Рабочий диапазон: {target_sets}×{rep_min}–{rep_max} сек.",\n            "decision": "add_time",\n        }\n\n'''
+              if marker not in s:
+                  raise SystemExit('progression marker not found')
+              s = s.replace(marker, timed + marker, 1)
+          s = s.replace(
+              '            "load_hint": ex.load_hint,\n            "notes": ex.notes,\n',
+              '            "load_hint": ex.load_hint,\n            "notes": ex.notes,\n            "measure": ex.measure,\n',
+          )
+          p.write_text(s, encoding='utf-8')
+
+          # --- strength_api.py ---
+          p = Path('backend/strength_api.py')
+          s = p.read_text(encoding='utf-8')
+          s = s.replace(
+              'from backend.strength_plan import build_prescription, phase_for',
+              'from backend.strength_plan import EXERCISES, build_prescription, phase_for, session_template',
+          )
+          # Enrich history with names and measurement type.
+          old = '''                x["reps"] = reps\n                x["loads"] = _decode_loads(x.pop("loads_json"), x.get("load"), reps)\n                s["exercises"].append(x)\n'''
+          new = '''                x["reps"] = reps\n                x["loads"] = _decode_loads(x.pop("loads_json"), x.get("load"), reps)\n                meta = EXERCISES.get(x["exercise_key"])\n                x["name"] = meta.name if meta else x["exercise_key"]\n                x["measure"] = meta.measure if meta else "reps"\n                s["exercises"].append(x)\n'''
+          if old in s:
+              s = s.replace(old, new, 1)
+
+          # Add record endpoint for editing a completed session.
+          if '@router.get("/record/{number}")' not in s:
+              anchor = '\n\ndef _normalise_set_loads(ex: ExerciseResult) -> list[float | None]:\n'
+              endpoint = '''\n\n@router.get("/record/{number}")\ndef strength_record(number: int) -> dict[str, Any]:\n    if not 1 <= number <= 24:\n        raise HTTPException(status_code=404, detail="Session must be 1..24")\n    ensure_tables()\n    with connect() as conn:\n        log = conn.execute("SELECT * FROM strength_workout_logs WHERE number=?", (number,)).fetchone()\n        if not log:\n            raise HTTPException(status_code=404, detail="Силовая тренировка не найдена")\n        prev = previous_by_exercise(conn, number)\n        rows = conn.execute(\n            "SELECT exercise_key,load,reps_json,loads_json,rir,pain,note FROM strength_performance WHERE session_number=? ORDER BY id",\n            (number,),\n        ).fetchall()\n\n    saved: dict[str, dict[str, Any]] = {}\n    for row in rows:\n        reps = json.loads(row["reps_json"] or "[]")\n        loads = _decode_loads(row["loads_json"], row["load"], reps)\n        meta = EXERCISES.get(row["exercise_key"])\n        saved[row["exercise_key"]] = {\n            "exercise_key": row["exercise_key"],\n            "name": meta.name if meta else row["exercise_key"],\n            "measure": meta.measure if meta else "reps",\n            "reps": reps,\n            "loads": loads,\n            "rir": row["rir"],\n            "pain": row["pain"],\n            "note": row["note"],\n        }\n\n    fatigue = log["fatigue_mode"] or "green"\n    if fatigue not in {"green", "yellow", "post_hard_run", "red"}:\n        fatigue = "green"\n    plan = build_prescription(number, prev, fatigue_mode=fatigue)\n\n    # Preserve legacy dead-bug records exactly when editing old sessions, while\n    # all new A sessions use the much simpler timed forearm plank.\n    if "dead_bug" in saved and "front_plank" not in saved:\n        legacy = EXERCISES["dead_bug"]\n        for i, ex in enumerate(plan["exercises"]):\n            if ex["key"] == "front_plank":\n                plan["exercises"][i] = {\n                    "key": legacy.key, "name": legacy.name, "sets": max(2, len(saved["dead_bug"]["reps"])),\n                    "rep_min": legacy.rep_min, "rep_max": legacy.rep_max, "rir_target": plan["phase"]["rir"],\n                    "load_hint": legacy.load_hint, "notes": legacy.notes, "measure": legacy.measure,\n                    "previous": prev.get(legacy.key), "target_load": None,\n                    "target_text": "Старая запись. Для новых тренировок это упражнение заменено планкой.",\n                    "decision": "legacy",\n                }\n                break\n\n    return {"log": dict(log), "plan": plan, "saved": saved}\n'''
+              if anchor not in s:
+                  raise SystemExit('record endpoint anchor not found')
+              s = s.replace(anchor, endpoint + anchor, 1)
+
+          # Existing records may contain the old exercise; accept any known exercise on edit.
+          s = s.replace(
+              '    known = {x["key"] for x in plan["exercises"]}\n',
+              '    known = set(EXERCISES)\n',
+          )
+
+          # Preserve the historical mode/date context when overwriting an old session.
+          old = '''    plan = prescription(payload.number)\n    known = set(EXERCISES)\n'''
+          new = '''    with connect() as conn:\n        existing_log = conn.execute("SELECT * FROM strength_workout_logs WHERE number=?", (payload.number,)).fetchone()\n        prev = previous_by_exercise(conn, payload.number)\n    if existing_log:\n        mode = existing_log["fatigue_mode"] or "green"\n        if mode not in {"green", "yellow", "post_hard_run", "red"}:\n            mode = "green"\n        plan = build_prescription(payload.number, prev, fatigue_mode=mode)\n        if payload.date is None:\n            session_date = date.fromisoformat(existing_log["date"])\n    else:\n        plan = prescription(payload.number)\n    known = set(EXERCISES)\n'''
+          if old in s:
+              s = s.replace(old, new, 1)
+          p.write_text(s, encoding='utf-8')
+
+          # --- index.html summary ---
+          p = Path('index.html')
+          s = p.read_text(encoding='utf-8')
+          s = s.replace('<li><span>Мёртвый жук</span><b>2×8–12/сторона</b></li>', '<li><span>Планка на предплечьях</span><b>2×30–60 сек</b></li>')
+          s = s.replace('strength-ui.js?v=0.5.1', 'strength-ui.js?v=0.5.3')
+          s = s.replace('strength-ui.css?v=0.5.1', 'strength-ui.css?v=0.5.3')
+          p.write_text(s, encoding='utf-8')
+          PY
+
+      - name: Replace strength UI
+        run: |
+          cat > strength-ui.js <<'JS'
+          // v0.5.3 adaptive strength coach: per-set loads, timed planks, editable history.
+          (function(){
+            let editingNumber=null;
+            let editingDate=null;
+
+            function measureLabel(ex){ return ex.measure==='time'?'сек':'повт.'; }
+            function targetLabel(ex){
+              return ex.measure==='time'
+                ? `${ex.sets}×${ex.rep_min}–${ex.rep_max} сек`
+                : `${ex.sets}×${ex.rep_min}–${ex.rep_max}`;
+            }
+            function setSummary(prev,measure='reps'){
+              if(!prev) return '';
+              const values=prev.reps||[];
+              if(measure==='time') return values.map(v=>`${v} сек`).join(' · ')+(prev.pain?` · боль ${prev.pain}/10`:'');
+              const loads=(prev.loads&&prev.loads.length)?prev.loads:values.map(()=>prev.load);
+              const sets=values.map((rep,i)=>loads[i]!==null&&loads[i]!==undefined?`${loads[i]}×${rep}`:`${rep}`).join(' · ');
+              return `${sets}${prev.rir!==null&&prev.rir!==undefined?` · RIR ${prev.rir}`:''}${prev.pain?` · боль ${prev.pain}/10`:''}`;
+            }
+            function strengthModeLabel(plan){
+              const labels={green:'обычная нагрузка',yellow:'с запасом',post_hard_run:'после тяжёлого бега',red:'восстановление'};
+              return labels[plan.fatigue_mode]||plan.fatigue_mode;
+            }
+
+            function injectStrengthCoach(){
+              const panel=document.querySelector('#strength');
+              if(!panel || document.querySelector('#adaptiveStrength')) return;
+              const first=panel.querySelector('.card');
+              const card=document.createElement('article');
+              card.id='adaptiveStrength'; card.className='card strength-coach';
+              card.innerHTML=`
+                <div class="strength-coach__head">
+                  <div><div class="eyebrow">Следующая тренировка</div><h2 id="strengthPlanTitle">Загружаю план…</h2></div>
+                  <span id="strengthMode" class="integration-status">—</span>
+                </div>
+                <p id="strengthPhaseText" class="muted">План корректируется по прошлым силовым и текущей беговой нагрузке.</p>
+                <div id="strengthFatigue" class="strength-alert" style="display:none"></div>
+                <div id="strengthPrescription" class="strength-prescription"></div>
+                <div class="strength-coach__footer">
+                  <div class="tiny">Рабочие подходы фиксируются отдельно. Для планок записывается только время — без веса и без «повторов».</div>
+                  <div class="strength-actions"><button id="cancelStrengthEdit" class="ghost" style="display:none">Отмена</button><button id="saveStrengthSession" class="primary" style="display:none">Завершить тренировку</button></div>
+                </div>
+                <div id="strengthSaveMessage" class="tiny"></div>`;
+              first.insertAdjacentElement('beforebegin',card);
+
+              const history=document.createElement('article');
+              history.id='strengthHistoryCard'; history.className='card strength-history-card';
+              history.innerHTML=`<div class="section-head"><div><div class="eyebrow">Журнал</div><h2>Прошлые силовые</h2></div></div><p class="muted">Можно открыть любую завершённую тренировку, исправить вес, повторы или время и сохранить заново.</p><div id="strengthHistory" class="strength-history"><div class="tiny">Загружаю историю…</div></div>`;
+              card.insertAdjacentElement('afterend',history);
+            }
+
+            function renderSetRows(ex,disabled,saved){
+              const actual=saved||{};
+              const savedValues=actual.reps||[];
+              const savedLoads=actual.loads||[];
+              const setCount=Math.max(ex.sets||0,savedValues.length);
+              return Array.from({length:setCount},(_,i)=>{
+                const value=savedValues[i]??'';
+                if(ex.measure==='time'){
+                  return `<div class="strength-set-row strength-set-row--time" data-set="${i}"><div class="strength-set-label">Подход ${i+1}</div><label>Время, сек<input class="s-reps" type="number" step="1" min="1" max="600" value="${value}" placeholder="${ex.rep_min}–${ex.rep_max}" ${disabled}></label></div>`;
+                }
+                const defaultLoad=savedLoads[i]??(ex.target_load!==null&&ex.target_load!==undefined?ex.target_load:'');
+                return `<div class="strength-set-row" data-set="${i}"><div class="strength-set-label">Подход ${i+1}</div><label>Вес, кг<input class="s-load" type="number" step="0.5" min="0" value="${defaultLoad}" placeholder="—" ${disabled}></label><label>Повторы<input class="s-reps" type="number" step="1" min="1" max="100" value="${value}" placeholder="${ex.rep_min}–${ex.rep_max}" ${disabled}></label></div>`;
+              }).join('');
+            }
+
+            function renderPlan(plan,saved={},isEdit=false){
+              if(!plan){
+                document.querySelector('#strengthPlanTitle').textContent='24/24 — цикл завершён';
+                document.querySelector('#strengthPhaseText').textContent='Пора сравнить талию, фото, бег и силовые с точкой старта.';
+                document.querySelector('#strengthPrescription').innerHTML='';
+                document.querySelector('#saveStrengthSession').style.display='none';
+                return;
+              }
+              window.__currentStrengthPlan=plan;
+              document.querySelector('#strengthPlanTitle').textContent=isEdit?`Правка тренировки №${plan.number} · ${plan.type}`:`№${plan.number} · ${plan.type} · ${plan.phase.name}`;
+              const mode=document.querySelector('#strengthMode');
+              mode.textContent=isEdit?'редактирование':strengthModeLabel(plan);
+              mode.className='integration-status '+(plan.fatigue_mode==='green'&&!isEdit?'is-on':'');
+              document.querySelector('#strengthPhaseText').textContent=isEdit
+                ? `Исправь фактические подходы и сохрани. Следующий план пересчитается с учётом исправлений.`
+                : `${plan.phase.message} Цель по усилию: RIR ${plan.phase.rir}. Время: около ${plan.duration_min} минут.`;
+              const alert=document.querySelector('#strengthFatigue');
+              if(!isEdit && plan.fatigue_mode!=='green'){
+                alert.style.display='block'; alert.className=`strength-alert strength-alert--${plan.fatigue_mode}`;
+                alert.textContent=plan.fatigue_mode==='red'?`Сегодня лучше перенести силовую.`:`План облегчён автоматически.`;
+              } else alert.style.display='none';
+
+              document.querySelector('#strengthPrescription').innerHTML=plan.exercises.map((ex,i)=>{
+                const old=saved[ex.key]||null;
+                const prev=setSummary(ex.previous,ex.measure);
+                const disabled=(!isEdit&&ex.sets===0)?'disabled':'';
+                return `<div class="strength-exercise ${(!isEdit&&ex.sets===0)?'is-skipped':''}" data-exercise="${ex.key}" data-measure="${ex.measure||'reps'}">
+                  <div class="strength-exercise__number">${i+1}</div><div class="strength-exercise__body">
+                    <div class="strength-exercise__title"><strong>${escapeHtml(ex.name)}</strong><span>${ex.sets?targetLabel(ex):'пропустить'}</span></div>
+                    <div class="strength-target">${escapeHtml(ex.target_text||'')}</div>
+                    ${prev&&!isEdit?`<div class="strength-previous">Прошлый раз: ${escapeHtml(prev)}</div>`:''}
+                    <div class="strength-note">${escapeHtml(ex.notes||'')}</div>
+                    ${(ex.sets||old)?`<div class="strength-set-list">${renderSetRows(ex,disabled,old)}</div>
+                      <div class="strength-inputs strength-inputs--feedback">
+                        ${ex.measure==='time'?'':`<label>RIR после последнего подхода<input class="s-rir" type="number" step="0.5" min="0" max="5" value="${old?.rir??''}" placeholder="2" ${disabled}></label>`}
+                        <label>Боль 0–10<input class="s-pain" type="number" step="1" min="0" max="10" value="${old?.pain??0}" ${disabled}></label>
+                      </div>`:''}
+                  </div></div>`;
+              }).join('');
+              const save=document.querySelector('#saveStrengthSession');
+              save.style.display=(!isEdit&&plan.fatigue_mode==='red')?'none':'inline-block';
+              save.textContent=isEdit?'Сохранить изменения':'Завершить тренировку';
+              document.querySelector('#cancelStrengthEdit').style.display=isEdit?'inline-block':'none';
+            }
+
+            async function loadStrengthPlan(){
+              injectStrengthCoach();
+              if(typeof apiOnline==='undefined'||!apiOnline) return;
+              try{
+                const data=await api('strength/current'); editingNumber=null; editingDate=null; renderPlan(data.next,{},false);
+              }catch(e){ const t=document.querySelector('#strengthPlanTitle'); if(t)t.textContent='Не удалось загрузить силовой план'; const m=document.querySelector('#strengthSaveMessage'); if(m)m.textContent=e.message; }
+            }
+
+            function historyExerciseText(ex){
+              if(ex.measure==='time') return `${escapeHtml(ex.name)}: ${(ex.reps||[]).map(x=>`${x} сек`).join(' · ')}`;
+              const loads=ex.loads||[];
+              const sets=(ex.reps||[]).map((r,i)=>loads[i]!==null&&loads[i]!==undefined?`${loads[i]}×${r}`:`${r}`).join(' · ');
+              return `${escapeHtml(ex.name)}: ${sets}`;
+            }
+            async function loadStrengthHistory(){
+              if(typeof apiOnline==='undefined'||!apiOnline) return;
+              try{
+                const rows=await api('strength/history');
+                const box=document.querySelector('#strengthHistory'); if(!box)return;
+                if(!rows.length){box.innerHTML='<div class="tiny">Завершённых силовых пока нет.</div>';return;}
+                box.innerHTML=rows.map(s=>`<div class="strength-history-item"><div><strong>№${s.number} · ${escapeHtml(s.workout_type)} · ${escapeHtml(s.date)}</strong><div class="tiny strength-history-summary">${(s.exercises||[]).map(historyExerciseText).join('<br>')}</div></div><button class="ghost strength-edit-btn" data-edit-strength="${s.number}">Править</button></div>`).join('');
+                box.querySelectorAll('[data-edit-strength]').forEach(btn=>btn.addEventListener('click',()=>editStrength(Number(btn.dataset.editStrength))));
+              }catch(e){ const box=document.querySelector('#strengthHistory'); if(box)box.textContent='Не удалось загрузить историю: '+e.message; }
+            }
+            async function editStrength(number){
+              try{
+                const data=await api(`strength/record/${number}`); editingNumber=number; editingDate=data.log.date; renderPlan(data.plan,data.saved||{},true); document.querySelector('#adaptiveStrength').scrollIntoView({behavior:'smooth',block:'start'});
+              }catch(e){ const m=document.querySelector('#strengthSaveMessage'); if(m){m.textContent=e.message;m.className='tiny error-text';} }
+            }
+
+            async function saveStrength(){
+              const plan=window.__currentStrengthPlan; if(!plan)return;
+              const exercises=[];
+              document.querySelectorAll('#strengthPrescription .strength-exercise').forEach(row=>{
+                const ex=plan.exercises.find(x=>x.key===row.dataset.exercise); if(!ex)return;
+                if(!editingNumber&&ex.sets===0)return;
+                const reps=[],loads=[];
+                row.querySelectorAll('.strength-set-row').forEach(setRow=>{
+                  const raw=setRow.querySelector('.s-reps')?.value; if(raw==='')return;
+                  const value=Number(raw); if(!Number.isFinite(value)||value<=0)return;
+                  reps.push(Math.round(value));
+                  if((ex.measure||'reps')==='time') loads.push(null);
+                  else { const l=setRow.querySelector('.s-load')?.value; loads.push(l===''?null:Number(l)); }
+                });
+                if(!reps.length)return;
+                const rr=row.querySelector('.s-rir')?.value, pp=row.querySelector('.s-pain')?.value;
+                const lastLoad=[...loads].reverse().find(x=>x!==null&&Number.isFinite(x));
+                exercises.push({exercise_key:ex.key,load:lastLoad===undefined?null:lastLoad,loads,reps,rir:rr===''||rr===undefined?null:Number(rr),pain:pp===''||pp===undefined?0:Number(pp),note:null});
+              });
+              if(exercises.length<3){const m=document.querySelector('#strengthSaveMessage');m.textContent='Заполни рабочие подходы хотя бы в трёх упражнениях.';m.className='tiny error-text';return;}
+              const btn=document.querySelector('#saveStrengthSession'); btn.disabled=true; btn.textContent='Сохраняю…';
+              try{
+                const number=editingNumber||plan.number;
+                const res=await api('strength/session',{method:'POST',body:JSON.stringify({number,date:editingDate||new Date().toISOString().slice(0,10),exercises})});
+                const m=document.querySelector('#strengthSaveMessage'); m.textContent=editingNumber?`Тренировка №${number} исправлена. Следующий план пересчитан.`:(res.completed?'Сохранено. 24/24 — цикл завершён.':`Сохранено. План тренировки №${res.next.number} уже пересчитан.`); m.className='tiny ok-text';
+                editingNumber=null; editingDate=null;
+                if(typeof refreshServerState==='function') await refreshServerState(); await loadStrengthPlan(); await loadStrengthHistory();
+              }catch(e){const m=document.querySelector('#strengthSaveMessage');m.textContent=e.message;m.className='tiny error-text';}
+              finally{btn.disabled=false; btn.textContent=editingNumber?'Сохранить изменения':'Завершить тренировку';}
+            }
+
+            injectStrengthCoach();
+            document.querySelector('#saveStrengthSession')?.addEventListener('click',saveStrength);
+            document.querySelector('#cancelStrengthEdit')?.addEventListener('click',async()=>{editingNumber=null;editingDate=null;await loadStrengthPlan();});
+            document.querySelector('.tab[data-tab="strength"]')?.addEventListener('click',()=>setTimeout(()=>{loadStrengthPlan();loadStrengthHistory();},80));
+            let tries=0; const wait=setInterval(()=>{tries++;if(typeof apiOnline!=='undefined'&&apiOnline){clearInterval(wait);loadStrengthPlan();loadStrengthHistory();}if(tries>30)clearInterval(wait);},400);
+          })();
+          JS
+
+          cat >> strength-ui.css <<'CSS'
+          .strength-actions{display:flex;gap:8px;flex-wrap:wrap}
+          .strength-set-row--time{grid-template-columns:90px minmax(140px,220px)}
+          .strength-history{display:grid;gap:10px;margin-top:14px}
+          .strength-history-item{display:flex;justify-content:space-between;gap:16px;align-items:flex-start;padding:14px;background:#11151a;border:1px solid var(--line);border-radius:14px}
+          .strength-history-summary{margin-top:6px;line-height:1.55}
+          .strength-edit-btn{flex:0 0 auto}
+          @media(max-width:820px){.strength-history-item{flex-direction:column}.strength-set-row--time{grid-template-columns:1fr 1fr}}
+          CSS
+
+      - name: Add v0.5.3 smoke tests
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p=Path('.github/workflows/test.yml')
+          s=p.read_text(encoding='utf-8')
+          if 'node --check strength-ui.js' not in s:
+              s=s.replace('- run: node --check body-ui.js', '- run: node --check body-ui.js\n      - run: node --check strength-ui.js')
+          p.write_text(s,encoding='utf-8')
+          PY
+          python -m py_compile backend/strength_api.py backend/strength_plan.py
+          node --check strength-ui.js
+          grep -q 'Планка на предплечьях' backend/strength_plan.py
+          grep -q 'strength_record' backend/strength_api.py
+          grep -q 'Время, сек' strength-ui.js
+          grep -q 'Править' strength-ui.js
+
+      - name: Commit upgrade
+        run: |
+          git config user.name "sport-bot"
+          git config user.email "sport-bot@users.noreply.github.com"
+          git add backend/strength_plan.py backend/strength_api.py strength-ui.js strength-ui.css index.html .github/workflows/test.yml
+          if git diff --cached --quiet; then
+            echo "Already upgraded"
+          else
+            git commit -m "Add editable strength history and timed planks v0.5.3"
+            git push origin main
+          fi
