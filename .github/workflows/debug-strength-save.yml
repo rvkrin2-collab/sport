@@ -1,0 +1,43 @@
+name: debug-strength-save
+
+on:
+  push:
+    paths:
+      - '.github/workflows/debug-strength-save.yml'
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install -r requirements.txt
+      - name: Test per-set save
+        run: |
+          python - <<'PY'
+          from fastapi.testclient import TestClient
+          from backend.main import app
+
+          payload = {
+              'number': 1,
+              'date': '2026-09-01',
+              'exercises': [
+                  {'exercise_key':'leg_press','load':80,'loads':[60,80],'reps':[12,10],'rir':2,'pain':0},
+                  {'exercise_key':'incline_db_press','load':20,'loads':[18,20],'reps':[12,10],'rir':2,'pain':0},
+                  {'exercise_key':'lat_pulldown','load':50,'loads':[45,50],'reps':[12,10],'rir':2,'pain':0},
+                  {'exercise_key':'seated_row','load':50,'loads':[45,50],'reps':[12,10],'rir':2,'pain':0},
+                  {'exercise_key':'lateral_raise','load':8,'loads':[6,8],'reps':[15,12],'rir':2,'pain':0},
+                  {'exercise_key':'dead_bug','load':None,'loads':[None,None],'reps':[10,10],'rir':2,'pain':0},
+              ]
+          }
+          with TestClient(app) as client:
+              r = client.post('/api/strength/session', json=payload)
+              print(r.status_code, r.text)
+              assert r.status_code == 200, r.text
+              hist = client.get('/api/strength/history')
+              assert hist.status_code == 200, hist.text
+              data = hist.json()[0]
+              assert data['exercises'][0]['loads'] == [60.0,80.0], data
+          PY
